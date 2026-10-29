@@ -2,7 +2,7 @@
 
 | Spike | Result | Date run |
 |---|---|---|
-| 1 PayPal authorize/capture/payout | PARTIAL: authorize, idempotent capture replay and payout SUCCEED; capture stayed PENDING (PENDING_REVIEW), so the spike's own pass test (COMPLETED) FAILED; `--probe` not yet run | 2026-10-29 |
+| 1 PayPal authorize/capture/payout | PARTIAL: authorize, idempotent capture replay and payout SUCCEED; capture stayed PENDING (PENDING_REVIEW), so the spike's own pass test (COMPLETED) FAILED; `--probe` PASS | 2026-10-29 |
 | 2 GitHub Actions runner | PASS (pass, fail, probe, reject all as expected) | 2026-10-29 |
 | 3 Webhook verify (Render Free) | NOT RUN (needs the repo on GitHub and a Render deploy) | |
 | 4 Gemini structured output | PASS on `gemini-3.6-flash` (3.8 overloaded) | 2026-10-29 |
@@ -24,7 +24,7 @@
 - **Real payout fee:** 0.25 (batch fees 0.25) on a 47.50 payout.
 - **Fee coverage at 5%:** net 47.76 - payout 47.50 - payout fee 0.25 = **+0.01**. The 5% platform fee (2.50) is almost entirely consumed by PayPal's costs (2.24 + 0.25 = 2.49). For Phase 5: fee = a percentage plus a fixed amount covering PayPal's 3.49% + 0.49 capture fee and the payout fee, plus an Arbiter margin; compute the payout as milestone minus that fee, never as a flat 95%.
 - Approval: the first four attempts timed out because I waited inside a single turn; the order never reached APPROVED. The fifth run used a 30-minute window plus polling the order status and worked. The localhost redirect was not needed.
-- Not yet run: `--probe` (USD 5.00 authorize, reauthorize inside the honor period, void). Needs one more approval click.
+- **`--probe` (USD 5.00) PASS:** authorization 0M789984BD431102H CREATED, `expiration_time` 2026-11-27T15:36:59Z (29 days again). `reauthorize` immediately after authorizing was **rejected: HTTP 422 UNPROCESSABLE_ENTITY** ("could not be performed, semantically incorrect, or failed business validation", debug id f871826bc43a8), as expected inside the honor period; this does not yet show whether reauthorize works after day 3, which can only be tested after 3 days (try on or after 1 Nov with this authorization if it were not voided; start a new unvoided one to test). **Void returned HTTP 204.** Design note: Phase 5's day-3 reauthorize job must treat a 422 as "not yet allowed / not needed" and not as a failure, and because the authorization already lasts 29 days, reauthorize may only be needed for the funds guarantee.
 
 ## 2 GitHub Actions runner (live runs, 2026-10-29)
 - Repos: antonyjasfer/arbiter-runner (default branch main, workflow verify.yml) and antonyjasfer/arbiter-spike-fixture (branches pass, fail, probe; default set to pass). Secret scan before push: clean.
