@@ -1,0 +1,18 @@
+# secrets
+.env
+.env.local
+.env.*.local
+
+# dependencies and build output
+node_modules/
+.next/
+dist/
+coverage/
+
+# spike run artefacts (contain payment ids)
+spikes/.out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
