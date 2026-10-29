@@ -2,7 +2,7 @@
 
 | Spike | Result | Date run |
 |---|---|---|
-| 1 PayPal authorize/capture/payout | NOT COMPLETE: first attempt timed out waiting for buyer approval (order created, nothing authorized or captured) | 2026-10-29 |
+| 1 PayPal authorize/capture/payout | PARTIAL: authorize, idempotent capture replay and payout SUCCEED; capture stayed PENDING (PENDING_REVIEW), so the spike's own pass test (COMPLETED) FAILED; `--probe` not yet run | 2026-10-29 |
 | 2 GitHub Actions runner | PASS (pass, fail, probe, reject all as expected) | 2026-10-29 |
 | 3 Webhook verify (Render Free) | NOT RUN (needs the repo on GitHub and a Render deploy) | |
 | 4 Gemini structured output | PASS on `gemini-3.6-flash` (3.8 overloaded) | 2026-10-29 |
@@ -14,8 +14,17 @@
 - Workflow `validate` block run locally against hostile inputs (shell command in repo URL, SHA, run id; http deploy URL; newline injection; control character): each rejected, valid inputs accepted, nothing executed. This is a local test of the script text, not the GitHub run; the `reject` case on GitHub is still to do.
 - Webhook server run locally: `/health` 200; forged POST with no webhook id → 503; with a webhook id and missing PayPal headers → 400. Real signature verification is not yet tested.
 
-## 1 PayPal
-- Not run yet. Script: `spikes/01-paypal.ts` ($50.00 capture, $47.50 payout, prints real capture fee and real payout fee, authorization `expiration_time`).
+## 1 PayPal (main flow run 2026-10-29, USD 50.00)
+- Order 08S03373ND071491C, authorization 77A208102C556205J (status CREATED), capture 3PW138358B024184X, payout batch FPTNNNWCC7JM6. Request ids are in `spikes/.out/paypal-run.json` (git-ignored).
+- **Authorization `expiration_time` = 2026-11-27T15:29:26Z, about 29 days from authorization** (US sandbox). The 3-day figure in some docs is the honor period, not the validity; the reauthorize probe still has to show what happens on day 3.
+- **Capture status was PENDING, reason PENDING_REVIEW** (re-read later: still PENDING; the authorization shows CAPTURED). So a successful capture call does not mean money is settled. The spike's pass criterion (capture COMPLETED) therefore reported FAIL; I did not loosen it. The Phase 5 state machine needs a CAPTURE_PENDING state, must wait for `PAYMENT.CAPTURE.COMPLETED` (via webhook plus a fetch from PayPal) before treating the milestone as paid or releasing the payout, and the payment guard must refuse payout while the capture is PENDING. Open question for you: check the sandbox business account (developer.paypal.com → Testing tools → Sandbox accounts → that account → settings / payment review) for why captures are held; I could not tell from the API.
+- **Idempotency:** replaying the capture with the same `PayPal-Request-Id` returned HTTP 200 with the same capture id.
+- **Payout** of 47.50 to the freelancer: batch SUCCESS, item SUCCESS, even though the capture was still PENDING (the sandbox does not enforce settled funds). Do not rely on that in the product.
+- **Real capture fee:** gross 50.00, PayPal fee 2.24, net 47.76 = 4.48% of the amount. That matches 3.49% + 0.49 fixed (1.7451 + 0.49 = 2.2351, rounded 2.24); one data point, treat the exact split as an inference.
+- **Real payout fee:** 0.25 (batch fees 0.25) on a 47.50 payout.
+- **Fee coverage at 5%:** net 47.76 - payout 47.50 - payout fee 0.25 = **+0.01**. The 5% platform fee (2.50) is almost entirely consumed by PayPal's costs (2.24 + 0.25 = 2.49). For Phase 5: fee = a percentage plus a fixed amount covering PayPal's 3.49% + 0.49 capture fee and the payout fee, plus an Arbiter margin; compute the payout as milestone minus that fee, never as a flat 95%.
+- Approval: the first four attempts timed out because I waited inside a single turn; the order never reached APPROVED. The fifth run used a 30-minute window plus polling the order status and worked. The localhost redirect was not needed.
+- Not yet run: `--probe` (USD 5.00 authorize, reauthorize inside the honor period, void). Needs one more approval click.
 
 ## 2 GitHub Actions runner (live runs, 2026-10-29)
 - Repos: antonyjasfer/arbiter-runner (default branch main, workflow verify.yml) and antonyjasfer/arbiter-spike-fixture (branches pass, fail, probe; default set to pass). Secret scan before push: clean.
