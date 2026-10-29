@@ -1,0 +1,8 @@
+{
+  "name": "arbiter-spike-webhook",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "tsx server.ts" },
+  "engines": { "node": ">=20" },
+  "dependencies": { "tsx": "4.23.15", "typescript": "7.0.2" }
+}
