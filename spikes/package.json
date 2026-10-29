@@ -1,0 +1,27 @@
+{
+  "name": "arbiter-spikes",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway Phase 1 risk spikes. Not product code.",
+  "scripts": {
+    "spike:paypal": "tsx 01-paypal.ts",
+    "spike:runner": "tsx 02-runner.ts",
+    "spike:gemini": "tsx 04-gemini.ts",
+    "spike:neon": "tsx 05-neon-ping.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "2.32.0",
+    "fflate": "0.8.3",
+    "pg": "8.23.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
