@@ -62,7 +62,20 @@ async function createAndApprove(token: string, amount: string, label: string): P
   console.log("\nOpen this URL in a PRIVATE window and approve as the CLIENT sandbox personal account:\n" + link.href + "\n");
   console.log("Waiting up to 5 minutes for the approval redirect on localhost...");
   try {
-    await waitForApproval(PORT, 300_000);
+    // Either the localhost redirect arrives, or polling sees the order APPROVED (works even if the redirect never reaches this machine).
+    const redirect = waitForApproval(PORT, 300_000);
+    const polled = (async () => {
+      for (let waited = 0; waited < 300; waited += 3) {
+        await sleep(3000);
+        const o = await ppFetch<Order>(token, "GET", `/v2/checkout/orders/${order.body.id}`);
+        if (o.body.status === "APPROVED") return;
+      }
+      throw new Error("order never reached APPROVED");
+    })();
+    redirect.catch(() => {});
+    polled.catch(() => {});
+    await Promise.any([redirect, polled]);
+    console.log("approval detected");
   } catch (e) {
     console.error(`Approval not completed (${(e as Error).message}). Order id: ${order.body.id}. Nothing authorized or captured.`);
     process.exit(1);
