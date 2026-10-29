@@ -39,4 +39,9 @@
 - `pg` printed an SSL-mode deprecation warning; set `sslmode=verify-full` explicitly in the connection string or config in Phase 2.
 
 ## Decisions for Phase 2
+- Neon (user note): use the pooled connection, set sslmode explicitly, and evaluate Neon's serverless driver to cut the 3-4 s connect time.
+- Screenshots (user note): browser-screenshot artifacts come only from the separate browser job that runs no repo code, never from the tests job (already how verify.yml is built).
+- Gemini: default model is gemini-3.6-flash (accepted by the user); re-test gemini-3.8-flash before submission.
+- Phase 3 (user note): AI calls can take up to about 30 s, so the agreement compiler must run as a background job with a progress state in the UI and never block a request.
+- Repos antonyjasfer/arbiter-spike-fixture and antonyjasfer/arbiter-runner created (public, empty) on 2026-10-29; nothing pushed yet.
 - Pending the remaining spikes.
