@@ -56,6 +56,7 @@ describe("validateVerifyInputs", () => {
     ["sha with a command", { commitSha: "HEAD;id" }],
     ["http deploy url", { deployUrl: "http://example.com" }],
     ["deploy url with a space", { deployUrl: "https://example.com/a b" }],
+    ["deploy url with a control character", { deployUrl: "https://example.com/a\u001b[0m" }],
     ["non-numeric run id", { runId: "12ab" }],
     ["run id with a command", { runId: "1; echo" }],
     ["run id longer than 18 digits", { runId: "1234567890123456789" }],

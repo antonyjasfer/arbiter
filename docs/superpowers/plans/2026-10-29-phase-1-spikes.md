@@ -54,7 +54,7 @@ spikes/
   02-runner.ts                     # Spike 2 (Task 4)
   runner/                          # published to the public repo arbiter-runner (Task 4)
     .github/workflows/verify.yml
-    checks/browser.mjs  package.json  README.md
+    README.md   (the Playwright check script is inline in verify.yml, so no checkout is needed)
   fixtures/node-fixture/           # published as arbiter-spike-fixture, branches pass / fail / probe (Task 3)
   03-webhook/{package.json,server.ts,verify.ts,verify.test.ts}   # Task 5, deployed to Render Free
   04-gemini.ts                     # Spike 4 (Task 6)
@@ -138,7 +138,7 @@ spikes/
 ### Task 4: Spike 2, GitHub Actions runner on the fixture repo
 
 **Files:**
-- Create: `spikes/runner/.github/workflows/verify.yml`, `spikes/runner/checks/browser.mjs`, `spikes/runner/package.json`, `spikes/runner/README.md`, `spikes/lib/github.ts`, `spikes/02-runner.ts`
+- Create: `spikes/runner/.github/workflows/verify.yml`, `spikes/runner/README.md`, `spikes/lib/github.ts`, `spikes/02-runner.ts`
 - Test: `spikes/lib/github.test.ts`
 
 **Design decisions (record in FINDINGS):**
@@ -147,7 +147,7 @@ spikes/
 - `permissions: {}` at workflow level **and** on every job (a job that needs more must say so explicitly; none do); the runner repo is **not** checked out, so no `.git` credentials exist on any VM.
 - Jobs: `validate` (regex-checks inputs; **inputs are only read through `env:`, never `${{ inputs.* }}` inside `run:`**: `repo_url` must match `^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`, `commit_sha` `^[0-9a-f]{40}$`, `run_id` `^[0-9]{1,18}$`, `deploy_url` `^https://[A-Za-z0-9.-]+(/[^[:space:]]*)?$`); then three more jobs: `tests` (needs `validate`; **untrusted code only**), `browser` (needs `validate`) and `canary-holder` (needs `validate`; the **only** job that references `secrets.SPIKE_CANARY`, prints just the character count to prove the secret exists in this repo, and runs no repo code). `tests` and `browser` never reference `secrets.*`. Separate jobs run on separate VMs, so the untrusted job cannot see the canary even by accident; the probe checks the untrusted job's environment for credential-shaped names and tokens.
 - `tests` job (`permissions: {}`, no secrets, `timeout-minutes: 10`) steps, named exactly: `fetch` (`git init`, `git fetch --depth 1 "$REPO_URL" "$COMMIT_SHA"`, `git checkout FETCH_HEAD`, with `REPO_URL` and `COMMIT_SHA` coming from `env:`), `install` (`env -i PATH="$PATH" HOME="$HOME" npm ci`), `unit-tests` (`env -i ... npm test`). The untrusted steps run under `env -i` so they inherit no workflow environment.
-- `browser` job (`permissions: {}`, no secrets, `timeout-minutes: 10`): install Playwright Chromium, run `checks/browser.mjs "$DEPLOY_URL"` (asserts HTTP 200 and a non-empty `<title>`, saves `screenshot.png`).
+- `browser` job (`permissions: {}`, no secrets, `timeout-minutes: 10`): install Playwright Chromium, run an inline `check.mjs` that reads `DEPLOY_URL` from `env:` (asserts HTTP 200 and a non-empty `<title>`, saves `screenshot.png`).
 - **Verdict source of truth = GitHub's Jobs API** (`GET /repos/{o}/{r}/actions/runs/{id}/jobs`: job and step `conclusion`), not the artifact, because untrusted test code can write files on the VM but cannot change GitHub's recorded step conclusions. The artifact (`logs`: `test.log`, `screenshot.png`) is display evidence. The public run URL (`html_url`) is the evidence link.
 - Known honest limit: **GitHub-hosted runners have open internet egress**; there is no GitHub/npm allow-list. Mitigations: no secrets, ephemeral VM, 10-minute timeout, public repos only. CLAUDE.md rule 4 and the README say so.
 
@@ -163,7 +163,7 @@ spikes/
 
 - [ ] **Step 1: Write failing tests** `github.test.ts`: `parseRepoUrl("https://github.com/a/b.git")` → `{owner:"a", repo:"b"}`; `parseRepoUrl("https://evil.com/a/b")` and `"https://github.com/a/b; rm -rf /"` throw; `matchRunByTitle` ignores runs older than `notBefore`, ignores a different `run_id`, and returns the newest match; `validateVerifyInputs` returns `[]` for a valid set and reports a problem for each of: repo URL `https://github.com/a/b;touch x`, repo URL on `gitlab.com`, SHA `abc123`, SHA with uppercase or 41 chars, `http://` deploy URL, deploy URL containing a space, run id `12ab`, run id `1; echo`, run id longer than 18 digits.
 - [ ] **Step 2: Run** `npx vitest run lib/github` → FAIL; **implement** `parseRepoUrl` and `matchRunByTitle` → PASS.
-- [ ] **Step 3: Write `spikes/runner/`** per the design decisions (workflow, `checks/browser.mjs`, `package.json` with `playwright` as the one dependency, README stating the egress limit). Lint the YAML with `actionlint` if available; otherwise read it twice against Review Focus item 5.
+- [ ] **Step 3: Write `spikes/runner/`** per the design decisions (workflow with the Playwright check inline, README stating the egress limit). Lint the YAML with `actionlint` if available; otherwise read it twice against Review Focus item 5.
 - [ ] **Step 4: Review:** dispatch a fresh opus subagent with `superpowers:requesting-code-review` on `spikes/runner/` only, focused on injection through inputs, secret exposure and token permissions. Fix findings.
 - [ ] **Step 5: Hand steps (you):** (a) add a repository secret `SPIKE_CANARY` (any random dummy string, not a real credential) to `arbiter-runner`; (b) I show the exact `git push` into `arbiter-runner` and wait for your yes before running it (it publishes to your public repo); (c) confirm `GITHUB_RUNNER_TOKEN` is fine-grained with Actions read/write on `arbiter-runner` only.
 - [ ] **Step 6: Implement** `ghFetch`, `dispatchVerify`, `waitForRun`, `downloadArtifactFiles` and `02-runner.ts`.
@@ -238,7 +238,7 @@ spikes/
 
 ---
 
-### Task 7: Findings note, optional Neon ping, and phase gate
+### Task 7: Neon ping, findings note, and phase gate
 
 **Files:**
 - Create: `spikes/FINDINGS.md`
@@ -315,4 +315,5 @@ spikes/
 - **Added beyond your list (flagged, now approved):** a fourth workflow input `deploy_url`; a `probe` fixture branch and a separate canary job so the "cannot see any secret" check is not vacuous; a `reject` spike case for hostile inputs; verdicts read from GitHub's Jobs API; the Neon ping.
 - **Open assumptions to confirm at run time (not verified by running):** the dispatch response returns `workflow_run_id`; the fine-grained token can list/download artifacts; Jobs API step conclusions are usable; Playwright Chromium installs within the 10-minute limit; `gemini-3.8-flash` is genuinely free in AI Studio and `interactions.create` accepts the schema; free-tier numeric limits; the listed PayPal webhook event names exist; the Render Free instance wakes fast enough for PayPal's first delivery.
 - **Type consistency:** `requireEnv`, `ppFetch`, `ghFetch`, `StructuredAi`, `RawJsonCall` and `AiHttpError` are defined once and used by name in later tasks.
+- **Review follow-ups for Phase 4 (from the opus review of verify.yml):** any Arbiter-authored acceptance tests must run in a separate job on a fresh checkout with `--ignore-scripts`, never in the VM that ran `npm ci`; never add caching to the runner repo; reject `localhost`/IP-literal deploy URLs on the Arbiter side; keep `run_id` unique; treat `skipped`/`cancelled` jobs as not-PASS; do not claim "commit is in repo X" without a separate check (GitHub serves fork-only SHAs from the parent URL).
 - **Not covered here by design:** JS SDK v6 buttons (first task of Phase 5), reauthorize scheduling (Phase 5, a scheduled GitHub Action calling a protected endpoint), **step-security Harden-Runner egress allow-list on our public runner repo (a Phase 4 task: check whether it can enforce an allow-list; not added now)**, KERNEL, APIMatic plugin, AG Studio.

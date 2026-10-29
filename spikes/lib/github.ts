@@ -9,7 +9,7 @@ export const WORKFLOW_FILE = "verify.yml";
 export const REPO_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 export const SHA_RE = /^[0-9a-f]{40}$/;
 export const RUN_ID_RE = /^[0-9]{1,18}$/;
-export const DEPLOY_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(\/\S*)?$/;
+export const DEPLOY_URL_RE = /^https:\/\/[A-Za-z0-9.-]+(\/[!-~]*)?$/;
 
 export type VerifyInput = { repoUrl: string; commitSha: string; runId: string; deployUrl: string };
 
@@ -171,6 +171,9 @@ export async function waitForRun(env: RunEnv, ghRunId: number, timeoutMs: number
   }
 }
 
+// Only these artifact names are accepted. `tests` uploads none (untrusted VM); anything unexpected means tampering.
+export const ALLOWED_ARTIFACTS = new Set(["browser-screenshot"]);
+
 export async function downloadArtifactFiles(env: RunEnv, ghRunId: number): Promise<Record<string, Uint8Array>> {
   const list = await ghFetch<{ artifacts: { id: number; name: string; expired: boolean }[] }>(
     env.GITHUB_RUNNER_TOKEN,
@@ -178,6 +181,8 @@ export async function downloadArtifactFiles(env: RunEnv, ghRunId: number): Promi
     `/repos/${env.RUNNER_REPO}/actions/runs/${ghRunId}/artifacts?per_page=50`,
   );
   const out: Record<string, Uint8Array> = {};
+  const unexpected = list.body.artifacts.filter((x) => !ALLOWED_ARTIFACTS.has(x.name)).map((x) => x.name);
+  if (unexpected.length) throw new Error(`unexpected artifact(s) in run ${ghRunId}: ${unexpected.join(", ")}`);
   for (const a of list.body.artifacts.filter((x) => !x.expired)) {
     const r = await ghFetch<unknown>(env.GITHUB_RUNNER_TOKEN, "GET", `/repos/${env.RUNNER_REPO}/actions/artifacts/${a.id}/zip`);
     const location = r.headers.get("location");

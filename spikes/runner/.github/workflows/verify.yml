@@ -4,7 +4,10 @@
 #  - permissions: {} on the workflow and on every job; the runner repo is never checked out.
 #  - Inputs are NEVER interpolated inside `run:`. They reach shell only through `env:` and are validated by the
 #    `validate` job first. `run-name` uses run_id for display only (never executed).
-#  - Untrusted repo code runs ONLY in the `tests` job, which references no `secrets.*` and runs steps under `env -i`.
+#  - Untrusted repo code runs ONLY in the `tests` job, which references no `secrets.*`. Assume that VM is fully compromised by repo code
+#    (the runner user has sudo and can read process environments): the control is that NO secret exists in the job, not env -i.
+#    No artifact is uploaded from `tests` (an upload action would run with the job's artifact credentials after untrusted code);
+#    test output evidence is the job log via the Jobs/Logs API and the public run URL, and it is freelancer-controlled.
 #  - The only job that references a secret is `canary-holder`, which runs no repo code. The production runner holds no secrets at all.
 #  - GitHub-hosted runners have OPEN internet egress; there is no allow-list. Mitigations: no secrets, fresh VM, timeouts, public repos only.
 #  - Verdicts are read by Arbiter from GitHub's Jobs API (job/step conclusions), not from files the test code could write.
@@ -48,11 +51,12 @@ jobs:
           DEPLOY_URL: ${{ inputs.deploy_url }}
         run: |
           set -eu
+          export LC_ALL=C
           # Same patterns as spikes/lib/github.ts. Values are never printed (they could contain control sequences).
           repo_re='^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
           sha_re='^[0-9a-f]{40}$'
           run_re='^[0-9]{1,18}$'
-          url_re='^https://[A-Za-z0-9.-]+(/[^[:space:]]*)?$'
+          url_re='^https://[A-Za-z0-9.-]+(/[!-~]*)?$'
           bad=0
           nl=$'\n'
           check() { # name value regex
@@ -84,7 +88,7 @@ jobs:
           [ "${#CANARY}" -gt 0 ]
 
   tests:
-    # Untrusted code only. No secrets.* anywhere in this job.
+    # Untrusted code only. No secrets.* anywhere in this job. No artifact upload (see header).
     needs: validate
     runs-on: ubuntu-latest
     permissions: {}
@@ -105,7 +109,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs" work
           cd work
           git init -q
-          git fetch -q --depth 1 "$REPO_URL" "$COMMIT_SHA"
+          git -c core.hooksPath=/dev/null -c protocol.file.allow=never fetch -q --depth 1 -- "$REPO_URL" "$COMMIT_SHA"
           git checkout -q FETCH_HEAD
           git log -1 --format='checked out %H'
 
@@ -113,24 +117,14 @@ jobs:
         shell: bash
         working-directory: work
         run: |
-          set -o pipefail
-          env -i PATH="$PATH" HOME="$HOME" npm ci --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/logs/install.log"
+          # shell: bash already implies -eo pipefail. env -i only avoids accidental inheritance; it is not a security control.
+          env -i PATH="$PATH" HOME="$HOME" CI=true npm ci --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/logs/install.log"
 
       - name: unit-tests
         shell: bash
         working-directory: work
         run: |
-          set -o pipefail
-          env -i PATH="$PATH" HOME="$HOME" npm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
-
-      - name: upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tests-logs
-          path: ${{ runner.temp }}/logs
-          if-no-files-found: ignore
-          retention-days: 7
+          env -i PATH="$PATH" HOME="$HOME" CI=true npm test 2>&1 | tee "$RUNNER_TEMP/logs/test.log"
 
   browser:
     needs: validate
@@ -150,6 +144,8 @@ jobs:
       - name: browser-checks
         shell: bash
         working-directory: pw
+        # Chromium runs without its sandbox here (Playwright default) and follows redirects; nothing valuable is on the VM,
+        # but the screenshot is public and may show wherever the URL redirects.
         env:
           DEPLOY_URL: ${{ inputs.deploy_url }}
         run: |
