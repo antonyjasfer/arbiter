@@ -55,11 +55,11 @@ function fileStore(): CacheStore {
 async function main() {
   const env = requireEnvOrExit(["GEMINI_API_KEY"]);
   const apiKey = env.GEMINI_API_KEY as string;
-  let model = "gemini-3.8-flash";
+  let model = "gemini-3.6-flash"; // gemini-3.8-flash was overloaded (503 / 150 s timeouts) on the free tier on 2026-10-29
   try {
     model = requireEnv(["AI_MODEL"]).AI_MODEL as string;
   } catch {
-    // default model id (pricing page row marked "Free of charge", checked 29 Oct 2026)
+    // default model id (also a "Free of charge" Flash row; see FINDINGS)
   }
   console.log(`model: ${model}`);
 

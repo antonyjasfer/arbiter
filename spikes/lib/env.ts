@@ -31,7 +31,7 @@ function loadDefaultSource(): Record<string, string | undefined> {
   } catch {
     // no file: fall through to process.env only
   }
-  return { ...fileVars, ...process.env };
+  return { ...process.env, ...fileVars }; // .env.local wins over stale shell variables
 }
 
 export function requireEnv(

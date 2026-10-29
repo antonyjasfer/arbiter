@@ -10,7 +10,8 @@ function retryAfterFromMessage(message: string): number | undefined {
 }
 
 export function createGeminiRaw(apiKey: string, model: string): RawJsonCall {
-  const ai = new GoogleGenAI({ apiKey });
+  // Free-tier calls can queue for a long time; never hang forever.
+  const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 90_000 } });
   return async ({ system, prompt, jsonSchema }) => {
     try {
       const interaction = await ai.interactions.create({
@@ -36,8 +37,8 @@ export function createGeminiRaw(apiKey: string, model: string): RawJsonCall {
       const err = e as { status?: number; code?: number; message?: string };
       const status = err.status ?? err.code;
       const message = err.message ?? String(e);
-      if (status === 429 || /RESOURCE_EXHAUSTED/i.test(message)) {
-        throw new AiHttpError(429, message, retryAfterFromMessage(message));
+      if (status === 429 || status === 503 || /RESOURCE_EXHAUSTED|high demand|UNAVAILABLE/i.test(message)) {
+        throw new AiHttpError(429, message, retryAfterFromMessage(message)); // 429 and 503 both mean: busy, retry later
       }
       throw e;
     }
