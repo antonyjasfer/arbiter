@@ -3,7 +3,7 @@
 | Spike | Result | Date run |
 |---|---|---|
 | 1 PayPal authorize/capture/payout | NOT COMPLETE: first attempt timed out waiting for buyer approval (order created, nothing authorized or captured) | 2026-10-29 |
-| 2 GitHub Actions runner | NOT RUN (needs pushes to `arbiter-spike-fixture` and `arbiter-runner`, and the `SPIKE_CANARY` secret) | |
+| 2 GitHub Actions runner | PASS (pass, fail, probe, reject all as expected) | 2026-10-29 |
 | 3 Webhook verify (Render Free) | NOT RUN (needs the repo on GitHub and a Render deploy) | |
 | 4 Gemini structured output | PASS on `gemini-3.6-flash` (3.8 overloaded) | 2026-10-29 |
 | 5 Neon ping | PASS | 2026-10-29 |
@@ -17,9 +17,17 @@
 ## 1 PayPal
 - Not run yet. Script: `spikes/01-paypal.ts` ($50.00 capture, $47.50 payout, prints real capture fee and real payout fee, authorization `expiration_time`).
 
-## 2 GitHub Actions runner
-- Opus review of `verify.yml` found no high-severity issue. Applied: removed artifact upload from the untrusted `tests` job; Arbiter accepts only the artifact named `browser-screenshot`; `git fetch` hardened (`--`, hooks off, file protocol off); validation patterns made ASCII-only with `LC_ALL=C`; `CI=true`; docs no longer treat `env -i` as a security control (the test VM is assumed fully compromised by the repo under test).
-- Everything else pending the live runs.
+## 2 GitHub Actions runner (live runs, 2026-10-29)
+- Repos: antonyjasfer/arbiter-runner (default branch main, workflow verify.yml) and antonyjasfer/arbiter-spike-fixture (branches pass, fail, probe; default set to pass). Secret scan before push: clean.
+- Dispatch response: **HTTP 204 with no run id** (the GitHub docs page says 200 with workflow_run_id; reality differs). Run matching by `run-name: verify <run_id>` worked every time.
+- Runs: pass https://github.com/antonyjasfer/arbiter-runner/actions/runs/40892765041 (conclusion success, ~61 s total, ~6 s queue); fail .../40892765720 (failure, ~39 s); probe .../40892764863 (success, ~42 s).
+- Jobs API gives usable verdicts: pass: validate, tests, canary-holder, browser all success, steps install and unit-tests success. fail: job tests failure with step unit-tests failure while browser and canary-holder stay success. Step and job conclusions are reliable verdict sources.
+- Secret probe: canary-holder printed `canary length: 17` (the secret exists in the repo and was masked in the log); the tests job on the probe branch printed `credential-shaped env var names: []` and all 4 tests passed (no SPIKE_CANARY, GITHUB_TOKEN, ACTIONS_RUNTIME_TOKEN or ACTIONS_ID_TOKEN_REQUEST_* visible to the test process). The limit stands: this is an environment check, not proof against a root process on the VM; no secret exists in that job by design.
+- Hostile inputs (reject): all four dispatches (repo_url with `;touch /tmp/pwned`, commit_sha `HEAD;id`, deploy_url over http, run_id `1;id`) ended with `validate` failure and tests, browser, canary-holder all `skipped`.
+- Artifact download with the fine-grained token (Actions read, Contents read): worked; only `browser-screenshot/screenshot.png` was present (tests uploads nothing); the allow-list accepted it.
+- Runner image: Node v22.23.4, git 2.56.0. Playwright 1.64.1 install + browser check: browser job ~40-47 s; `browser check ok: status=200, title length=14` against https://example.com.
+- Open egress was not separately tested; documented as an open limit. `actions/upload-artifact@v4` prints a Node.js 20 deprecation warning: move to the current major before Phase 4.
+- Not yet tested: hostile repo content (malicious postinstall), 10-minute timeout behaviour.
 
 ## 3 Webhook (Render Free, Virginia)
 - Pending.
