@@ -1,0 +1,13 @@
+{
+  "name": "arbiter-spike-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiny Node project used by the Arbiter Phase 1 runner spike. Safe to clone.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ms": "2.1.3"
+  }
+}
