@@ -1,23 +1,24 @@
-# Phase 1 Findings (in progress, started 2026-10-29)
+# Phase 1 Findings (2026-10-29 to 2026-11-03)
 
 | Spike | Result | Date run |
 |---|---|---|
 | 1 PayPal authorize/capture/payout | PARTIAL: authorize, idempotent capture replay and payout SUCCEED; capture stayed PENDING (PENDING_REVIEW), so the spike's own pass test (COMPLETED) FAILED; `--probe` PASS | 2026-10-29 |
 | 2 GitHub Actions runner | PASS (pass, fail, probe, reject all as expected) | 2026-10-29 |
-| 3 Webhook verify (Render Free) | IN PROGRESS: deployed; /health 200; forged POST 503 (no webhook id yet); real signature verification not yet tested | 2026-11-03 |
+| 3 Webhook verify (Render Free) | PASS: 5 of 5 real events verified SUCCESS; forged requests 400; cold start 23.7 s (one sample) | 2026-11-03 |
 | 4 Gemini structured output | PASS on `gemini-3.6-flash` (3.8 overloaded) | 2026-10-29 |
 | 5 Neon ping | PASS | 2026-10-29 |
 
 ## What passes locally (real output, 2026-10-29)
 - `npx vitest run` in `spikes/`: 5 test files, 40 tests passed. `npx tsc --noEmit`: no errors.
 - Fixture repo built locally from `spikes/fixtures/build-fixture-repo.mjs` (not pushed): branch `pass` exit 0, `fail` exit 1, `probe` exit 0 with a clean environment and exit 1 when `SPIKE_CANARY` is present.
-- Workflow `validate` block run locally against hostile inputs (shell command in repo URL, SHA, run id; http deploy URL; newline injection; control character): each rejected, valid inputs accepted, nothing executed. This is a local test of the script text, not the GitHub run; the `reject` case on GitHub is still to do.
-- Webhook server run locally: `/health` 200; forged POST with no webhook id → 503; with a webhook id and missing PayPal headers → 400. Real signature verification is not yet tested.
+- Workflow `validate` block run locally against hostile inputs (shell command in repo URL, SHA, run id; http deploy URL; newline injection; control character): each rejected, valid inputs accepted, nothing executed. This was a local test of the script text; the `reject` case later passed on GitHub (section 2).
+- Webhook server run locally: `/health` 200; forged POST with no webhook id → 503; with a webhook id and missing PayPal headers → 400. Real signature verification was tested later on Render (section 3).
 
 ## 1 PayPal (main flow run 2026-10-29, USD 50.00)
 - Order 08S03373ND071491C, authorization 77A208102C556205J (status CREATED), capture 3PW138358B024184X, payout batch FPTNNNWCC7JM6. Request ids are in `spikes/.out/paypal-run.json` (git-ignored).
 - **Authorization `expiration_time` = 2026-11-27T15:29:26Z, about 29 days from authorization** (US sandbox). The 3-day figure in some docs is the honor period, not the validity; the reauthorize probe still has to show what happens on day 3.
 - **Capture status was PENDING, reason PENDING_REVIEW** (re-read later: still PENDING; the authorization shows CAPTURED). So a successful capture call does not mean money is settled. The spike's pass criterion (capture COMPLETED) therefore reported FAIL; I did not loosen it. The Phase 5 state machine needs a CAPTURE_PENDING state, must wait for `PAYMENT.CAPTURE.COMPLETED` (via webhook plus a fetch from PayPal) before treating the milestone as paid or releasing the payout, and the payment guard must refuse payout while the capture is PENDING. Open question for you: check the sandbox business account (developer.paypal.com → Testing tools → Sandbox accounts → that account → settings / payment review) for why captures are held; I could not tell from the API.
+- **Capture status over time:** the 29 Oct capture 3PW138358B024184X read COMPLETED on 3 Nov, so the sandbox hold cleared on its own within about 4 days (exact time unknown; no webhook existed for most of that time). The 3 Nov capture 0V538190PA744902Y was still PENDING / PENDING_REVIEW 19 minutes later. Same fee, same 29-day expiry (2026-12-01T23:24:53Z), same replay result and same SUCCESS payout on the second run; the spike's own COMPLETED check failed again for the same reason.
 - **Idempotency:** replaying the capture with the same `PayPal-Request-Id` returned HTTP 200 with the same capture id.
 - **Payout** of 47.50 to the freelancer: batch SUCCESS, item SUCCESS, even though the capture was still PENDING (the sandbox does not enforce settled funds). Do not rely on that in the product.
 - **Real capture fee:** gross 50.00, PayPal fee 2.24, net 47.76 = 4.48% of the amount. That matches 3.49% + 0.49 fixed (1.7451 + 0.49 = 2.2351, rounded 2.24); one data point, treat the exact split as an inference.
@@ -46,7 +47,13 @@
   - `GET /webhook`: 404.
 - These 503s only show that the service fails closed without a webhook id. They do not test signature verification.
 - The PayPal dashboard's Add webhook form rejected this URL with "Please enter a valid url" (cause unknown). The API accepted the same URL: `POST /v1/notifications/webhooks` returned HTTP 201 and the read-back shows the URL and all 7 event types. Script: `03-webhook/register-webhook.ts` (reuses an existing webhook for the same URL). The id is in `.env.local`.
-- Still to do: set `PAYPAL_WEBHOOK_ID` in Render, re-run the forged request (expect 400), verify a real PayPal event, measure a cold start after 16+ idle minutes.
+- With `PAYPAL_WEBHOOK_ID` set, forged requests: no PayPal headers 400 (`missing required header`), fake PayPal headers 400 (PayPal's verify endpoint returned FAILURE).
+- Real events, second PayPal run on 2026-11-03 IST (order 7Y322603AR250312R, authorization 0US73908C81224019, capture 0V538190PA744902Y, payout batch SBYQVRNMHCTMG). Render log, 5 received, 5 `verification=SUCCESS`: PAYMENT.CAPTURE.PENDING, PAYMENT.AUTHORIZATION.CREATED, CHECKOUT.ORDER.APPROVED, PAYMENT.PAYOUTS-ITEM.SUCCEEDED, PAYMENT.PAYOUTSBATCH.SUCCESS.
+- **Events arrive out of order:** CAPTURE.PENDING reached the server before AUTHORIZATION.CREATED and ORDER.APPROVED, and PayPal's create_time for ORDER.APPROVED is later than for the capture. Delivery lag was about 9-11 s from create_time. Phase 5 handlers must not depend on event order and must reconcile by fetching from PayPal.
+- Not received: PAYMENT.CAPTURE.COMPLETED (capture still pending) and PAYMENT.AUTHORIZATION.VOIDED (the main flow does not void, and the probe's void ran before the webhook existed).
+- **Cold start:** idle 17 min 16 s, first `GET /health` 23.7 s (`uptimeSeconds` 9.6 and a new instance id in the log confirm a real restart), then 1.9 s and 1.3 s. One sample; Render says to expect up to about a minute.
+- Not tested: PayPal delivering an event to a sleeping service, PayPal's retry after a failed delivery, duplicate delivery. The spike has no de-duplication; Phase 5 does.
+- A second Render service, `arbiter-spike-fixture`, also exists in the workspace (branch `pass`, root dir `spikes/03-webhook`). Not used by this spike; free instance hours are shared across a workspace.
 
 ## 4 Gemini
 - First attempt failed because a stale `GEMINI_API_KEY` in the shell environment (39 chars, the leaked one) overrode the new key in `.env.local`. Fixed in `lib/env.ts`: `.env.local` now wins over shell variables. The user should delete the stale variable from their Windows environment.
@@ -67,5 +74,5 @@
 - Screenshots (user note): browser-screenshot artifacts come only from the separate browser job that runs no repo code, never from the tests job (already how verify.yml is built).
 - Gemini: default model is gemini-3.6-flash (accepted by the user); re-test gemini-3.8-flash before submission.
 - Phase 3 (user note): AI calls can take up to about 30 s, so the agreement compiler must run as a background job with a progress state in the UI and never block a request.
-- Repos antonyjasfer/arbiter-spike-fixture and antonyjasfer/arbiter-runner created (public, empty) on 2026-10-29; nothing pushed yet.
-- Pending the remaining spikes.
+- Webhooks: register through the API (`03-webhook/register-webhook.ts`), since the dashboard form rejected the Render URL. Handlers are order-independent; add a capture-pending state; payout waits for a COMPLETED capture read back from PayPal.
+- Cold starts: the first request after idle takes about 24 s or more; persist state and never rely on in-process timers.

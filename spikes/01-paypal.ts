@@ -10,6 +10,7 @@ const PORT = 3456;
 const CAPTURE_AMOUNT = "50.00"; // demo milestones are 50 USD or more
 const PLATFORM_FEE_PCT = 5;
 const PROBE = process.argv.includes("--probe");
+const APPROVAL_MS = Number(process.env.APPROVAL_TIMEOUT_MIN ?? "5") * 60_000;
 
 type Money = { currency_code?: string; currency?: string; value: string };
 type Link = { href: string; rel: string; method?: string };
@@ -60,12 +61,12 @@ async function createAndApprove(token: string, amount: string, label: string): P
   const link = order.body.links?.find((l) => l.rel === "payer-action") ?? order.body.links?.find((l) => l.rel === "approve");
   if (!link) throw new Error(`No payer-action/approve link on order ${order.body.id}`);
   console.log("\nOpen this URL in a PRIVATE window and approve as the CLIENT sandbox personal account:\n" + link.href + "\n");
-  console.log("Waiting up to 5 minutes for the approval redirect on localhost...");
+  console.log(`Waiting up to ${Math.round(APPROVAL_MS / 60000)} minutes for approval (redirect or order status)...`);
   try {
     // Either the localhost redirect arrives, or polling sees the order APPROVED (works even if the redirect never reaches this machine).
-    const redirect = waitForApproval(PORT, 300_000);
+    const redirect = waitForApproval(PORT, APPROVAL_MS);
     const polled = (async () => {
-      for (let waited = 0; waited < 300; waited += 3) {
+      for (let waited = 0; waited * 1000 < APPROVAL_MS; waited += 3) {
         await sleep(3000);
         const o = await ppFetch<Order>(token, "GET", `/v2/checkout/orders/${order.body.id}`);
         if (o.body.status === "APPROVED") return;
