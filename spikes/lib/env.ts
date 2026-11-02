@@ -24,6 +24,15 @@ function parseEnvFile(text: string): Record<string, string> {
   return out;
 }
 
+/** Sets NAME=value in .env.local text, keeping every other line and the file's line endings. */
+export function setEnvValue(text: string, name: string, value: string): string {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  // In JS `.` stops before \r, so a CRLF ending stays outside the match.
+  const line = new RegExp(`^(?:export +)?${name} *=.*$`, "m");
+  if (line.test(text)) return text.replace(line, () => `${name}=${value}`);
+  return `${text}${text === "" || text.endsWith("\n") ? "" : eol}${name}=${value}${eol}`;
+}
+
 function loadDefaultSource(): Record<string, string | undefined> {
   let fileVars: Record<string, string> = {};
   try {

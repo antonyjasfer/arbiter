@@ -45,7 +45,8 @@
   - Forged `POST /webhook` with fake PayPal headers: 503 `webhook_id not configured`, 0.38 s.
   - `GET /webhook`: 404.
 - These 503s only show that the service fails closed without a webhook id. They do not test signature verification.
-- Still to do: register the webhook, set `PAYPAL_WEBHOOK_ID`, re-run the forged request (expect 400), verify a real PayPal event, measure a cold start after 16+ idle minutes.
+- The PayPal dashboard's Add webhook form rejected this URL with "Please enter a valid url" (cause unknown). The API accepted the same URL: `POST /v1/notifications/webhooks` returned HTTP 201 and the read-back shows the URL and all 7 event types. Script: `03-webhook/register-webhook.ts` (reuses an existing webhook for the same URL). The id is in `.env.local`.
+- Still to do: set `PAYPAL_WEBHOOK_ID` in Render, re-run the forged request (expect 400), verify a real PayPal event, measure a cold start after 16+ idle minutes.
 
 ## 4 Gemini
 - First attempt failed because a stale `GEMINI_API_KEY` in the shell environment (39 chars, the leaked one) overrode the new key in `.env.local`. Fixed in `lib/env.ts`: `.env.local` now wins over shell variables. The user should delete the stale variable from their Windows environment.
