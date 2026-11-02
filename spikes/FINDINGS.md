@@ -4,7 +4,7 @@
 |---|---|---|
 | 1 PayPal authorize/capture/payout | PARTIAL: authorize, idempotent capture replay and payout SUCCEED; capture stayed PENDING (PENDING_REVIEW), so the spike's own pass test (COMPLETED) FAILED; `--probe` PASS | 2026-10-29 |
 | 2 GitHub Actions runner | PASS (pass, fail, probe, reject all as expected) | 2026-10-29 |
-| 3 Webhook verify (Render Free) | NOT RUN (needs the repo on GitHub and a Render deploy) | |
+| 3 Webhook verify (Render Free) | IN PROGRESS: deployed; /health 200; forged POST 503 (no webhook id yet); real signature verification not yet tested | 2026-11-03 |
 | 4 Gemini structured output | PASS on `gemini-3.6-flash` (3.8 overloaded) | 2026-10-29 |
 | 5 Neon ping | PASS | 2026-10-29 |
 
@@ -39,7 +39,13 @@
 - Not yet tested: hostile repo content (malicious postinstall), 10-minute timeout behaviour.
 
 ## 3 Webhook (Render Free, Virginia)
-- Pending.
+- Deployed from `arbiter` main to https://arbiter-q41f.onrender.com (Node 26.13). First checks 2026-11-03, with `PAYPAL_WEBHOOK_ID` unset, on a warm instance (uptime 574 s):
+  - `GET /health`: 200 in 0.79 s.
+  - Forged `POST /webhook` with no PayPal headers: 503 `webhook_id not configured`, 0.41 s.
+  - Forged `POST /webhook` with fake PayPal headers: 503 `webhook_id not configured`, 0.38 s.
+  - `GET /webhook`: 404.
+- These 503s only show that the service fails closed without a webhook id. They do not test signature verification.
+- Still to do: register the webhook, set `PAYPAL_WEBHOOK_ID`, re-run the forged request (expect 400), verify a real PayPal event, measure a cold start after 16+ idle minutes.
 
 ## 4 Gemini
 - First attempt failed because a stale `GEMINI_API_KEY` in the shell environment (39 chars, the leaked one) overrode the new key in `.env.local`. Fixed in `lib/env.ts`: `.env.local` now wins over shell variables. The user should delete the stale variable from their Windows environment.
