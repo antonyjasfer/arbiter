@@ -69,6 +69,16 @@
 - Connected through `DATABASE_URL`; PostgreSQL 18.6. First connect + `SELECT 1` + `SHOW server_version`: 4149 ms. Second (warm): 3275 ms. Both include a fresh TLS connection from India to us-east-1, so a new connection per request is slow; Phase 2 should reuse a connection pool. A true cold start (after 6+ idle minutes) has not been measured yet.
 - `pg` printed an SSL-mode deprecation warning; set `sslmode=verify-full` explicitly in the connection string or config in Phase 2.
 
+## Phase 2 live checks (2026-11-03, https://arbiter-q41f.onrender.com)
+- Render service `arbiter`: root dir `web`, build `npm ci && npm run build`, start `npm run start`, health check `/api/health`, auto-deploy after CI checks pass. `/api/health` 200; `/api/health?db=1` 200 with `db: ok`.
+- **Auth.js behind Render's proxy:** without `AUTH_URL`, Auth.js built every URL from the request host header, which on Render is `localhost:10000`, so GitHub got `redirect_uri=https://localhost:10000/api/auth/callback/github`. Setting `AUTH_URL=https://arbiter-q41f.onrender.com` fixed it (Auth.js `createActionURL` prefers `AUTH_URL`). After the fix the redirect_uri is the live callback, and the user signed in on the live site and reached `/dashboard`; one `users` row (login `antonyjasfer`) was created.
+- Webhook moved into the app: `register-webhook.ts` PATCHed the existing webhook (same id, so `PAYPAL_WEBHOOK_ID` is unchanged) to `/api/webhooks/paypal`, 7 event types. Forged POSTs: no PayPal headers 400, fake headers 400 (PayPal verify FAILURE). Old `/webhook`: 404.
+- Real events from a `--probe` run (order 1A643183C95993814, authorization 7XY64231T99249736, $5, voided 204): CHECKOUT.ORDER.APPROVED, PAYMENT.AUTHORIZATION.VOIDED, PAYMENT.AUTHORIZATION.CREATED, each verified and stored once. **VOIDED arrived before CREATED**; reconcile-by-fetch stored `VOIDED` for both authorization events, so a late event cannot roll state back.
+- **Duplicate delivery (real):** PayPal `.../webhooks-events/{id}/resend` (HTTP 202) for CREATED and VOIDED at 10:12 UTC; both delivered about 4 s later, logged `verification=SUCCESS` then `duplicate=true reconciled=false`. Row count stayed 3 (3 distinct ids).
+- **Lost delivery during a deploy:** a first resend at about 10:06 UTC, while Render was redeploying (10:05:55–10:07:23), never reached the app and was not retried within about 6 minutes. Deploys and sleeps can drop or delay webhooks, so Phase 5 must reconcile payment state by fetching from PayPal, not wait on webhooks.
+- Reauthorize on a fresh authorization returns 422 (as in Phase 1); it is only allowed later in the honor period.
+- Tests at the end of Phase 2: `web` 65 tests in 15 files; `spikes` 50 tests in 6 files; lint, typecheck and build clean; GitHub CI green.
+
 ## Decisions for Phase 2
 - Neon (user note): use the pooled connection, set sslmode explicitly, and evaluate Neon's serverless driver to cut the 3-4 s connect time.
 - Screenshots (user note): browser-screenshot artifacts come only from the separate browser job that runs no repo code, never from the tests job (already how verify.yml is built).

@@ -9,7 +9,7 @@ Phase 1 finished on 3 Nov IST, two days late. This section overrides sections 4,
 
 | # | Phase | Finish by (IST) |
 |---|---|---|
-| 2 | Foundation | end of Tue 4 Nov |
+| 2 | Foundation (**done** Mon 3 Nov IST, awaiting approval) | end of Tue 4 Nov |
 | 3 | Agreements and milestones | end of Wed 5 Nov |
 | 4 + 5 | Verification engine and PayPal payments, in parallel git worktrees | Wed 5 to Fri 7 Nov |
 | 6 | Integration and trust layer | Sat 8 Nov |

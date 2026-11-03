@@ -9,7 +9,7 @@ services:
     plan: free
     region: virginia
     branch: main
-    autoDeploy: true
+    autoDeployTrigger: checksPass
     rootDir: web
     buildCommand: npm ci && npm run build
     startCommand: npm run start
