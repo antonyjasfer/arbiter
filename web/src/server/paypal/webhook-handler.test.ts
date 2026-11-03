@@ -86,4 +86,39 @@ describe("handlePaypalWebhook", () => {
     });
     expect((await handlePaypalWebhook(req(), d)).status).toBe(500);
   });
+
+  it("re-reconciles a duplicate delivery whose earlier reconcile failed (review finding 1)", async () => {
+    let fail = true;
+    const { d, calls } = deps({
+      fetchResource: async (p) => {
+        calls.fetch.push(p);
+        if (fail) throw new Error("PayPal 503");
+        return { status: "PENDING" };
+      },
+    });
+    await handlePaypalWebhook(req(), d);
+    expect((await db().select().from(s.webhookEvents))[0]!.reconciledStatus).toBe("error");
+    fail = false;
+    const again = await handlePaypalWebhook(req(), d);
+    expect(again.status).toBe(200);
+    expect(calls.fetch).toHaveLength(2);
+    expect((await db().select().from(s.webhookEvents))[0]!.reconciledStatus).toBe("PENDING");
+  });
+
+  it("re-reconciles a duplicate whose status was never written", async () => {
+    const { d, calls } = deps();
+    await db().insert(s.webhookEvents).values({ paypalEventId: "WH-9", eventType: "PAYMENT.CAPTURE.PENDING", resourceType: "capture", resourceId: "C9", verified: true, payloadSha256: "c".repeat(64) });
+    expect((await handlePaypalWebhook(req(), d)).status).toBe(200);
+    expect(calls.fetch).toEqual(["/v2/payments/captures/C9"]);
+    expect((await db().select().from(s.webhookEvents))[0]!.reconciledStatus).toBe("PENDING");
+  });
+
+  it("answers 200 to a verified event it cannot use, so PayPal does not retry it for days (review finding 2)", async () => {
+    const { d } = deps();
+    const body = JSON.stringify({ id: "WH-D1", event_type: "CUSTOMER.DISPUTE.CREATED", resource_type: "dispute", resource: { dispute_id: "PP-D-1" } });
+    const res = await handlePaypalWebhook(req(HEADERS, body), d);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ignored: true });
+    expect(await db().select().from(s.webhookEvents)).toHaveLength(0);
+  });
 });

@@ -18,7 +18,7 @@ describe("recordEvent", () => {
   it("returns the existing row for a repeated event id", async () => {
     const first = await recordEvent(db(), e);
     const again = await recordEvent(db(), e);
-    expect(again).toEqual({ inserted: false, id: first.id });
+    expect(again).toEqual({ inserted: false, id: first.id, reconciledStatus: null });
     expect(await db().select().from(s.webhookEvents)).toHaveLength(1);
   });
 

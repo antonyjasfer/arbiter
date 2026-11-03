@@ -1,10 +1,17 @@
 // 1. Local runs: load the single repo-root .env.local (Next only reads env files from web/).
-//    On Render there is no such file; the dashboard's env vars are already in process.env.
-// 2. Fail fast, naming any missing env vars (never values).
+//    On Render there is no such file, so nothing is reloaded and the dashboard's env vars stay as they are.
+// 2. Fail fast: on missing env vars, log their names (never values) and exit.
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { loadEnvConfig } from "@next/env";
 import { serverEnv } from "@/server/env";
+import { checkEnvOrExit, loadRootEnvIfPresent } from "@/server/startup";
 
-// forceReload: Next has already loaded (and cached) env files from web/, which has none.
-loadEnvConfig(path.resolve(process.cwd(), ".."), process.env.NODE_ENV !== "production", { info: () => {}, error: console.error }, true);
-if (process.env.NEXT_PHASE !== "phase-production-build") serverEnv();
+loadRootEnvIfPresent(path.resolve(process.cwd(), ".."), {
+  exists: existsSync,
+  // forceReload: Next has already loaded (and cached) env files from web/, which has none.
+  load: (dir) => loadEnvConfig(dir, process.env.NODE_ENV !== "production", { info: () => {}, error: console.error }, true),
+});
+if (process.env.NEXT_PHASE !== "phase-production-build") {
+  checkEnvOrExit(serverEnv, { exit: (code) => process.exit(code), error: (message) => console.error(message) });
+}

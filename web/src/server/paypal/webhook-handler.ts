@@ -38,7 +38,11 @@ export async function handlePaypalWebhook(request: Request, deps: WebhookDeps): 
     const status = await deps.verify(verifyBody);
     deps.log(`${label} verification=${status}`);
     if (status !== "SUCCESS") return json(400, { error: "signature verification failed" });
-    if (!parsed.ok) return json(400, { error: "invalid event" });
+    // Verified but not a shape we use: acknowledge, or PayPal retries it for days and then drops it.
+    if (!parsed.ok) {
+      deps.log(`${label} ignored=unparseable`);
+      return json(200, { ok: true, ignored: true });
+    }
 
     const e = parsed.value;
     const stored = await recordEvent(deps.db, {
@@ -48,12 +52,13 @@ export async function handlePaypalWebhook(request: Request, deps: WebhookDeps): 
       resourceId: e.resourceId,
       payloadSha256: createHash("sha256").update(raw, "utf8").digest("hex"),
     });
-    if (!stored.inserted) {
-      deps.log(`${label} duplicate=true`);
-      return json(200, { ok: true, duplicate: true });
+    // A duplicate whose earlier reconcile failed or never ran is reconciled again (the GET is read-only).
+    const needsReconcile = stored.inserted || stored.reconciledStatus === null || stored.reconciledStatus === "error";
+    if (needsReconcile) {
+      await reconcileEvent(deps.db, { id: stored.id, resourceType: e.resourceType, resourceId: e.resourceId }, deps.fetchResource);
     }
-    await reconcileEvent(deps.db, { id: stored.id, resourceType: e.resourceType, resourceId: e.resourceId }, deps.fetchResource);
-    return json(200, { ok: true, duplicate: false });
+    if (!stored.inserted) deps.log(`${label} duplicate=true reconciled=${needsReconcile}`);
+    return json(200, { ok: true, duplicate: !stored.inserted });
   } catch (e) {
     deps.log(`${label} error=${(e as Error).message}`);
     return json(500, { error: "internal error" });
