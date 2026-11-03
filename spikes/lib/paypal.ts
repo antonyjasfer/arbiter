@@ -43,7 +43,7 @@ export async function getAccessToken(env: {
 
 export async function ppFetch<T>(
   token: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH",
   path: string,
   opts: { body?: unknown; requestId?: string; headers?: Record<string, string> } = {},
 ): Promise<{ status: number; body: T; requestId?: string }> {

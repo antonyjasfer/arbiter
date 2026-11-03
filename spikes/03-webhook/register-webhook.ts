@@ -1,12 +1,14 @@
-// Creates the PayPal sandbox webhook through the API and stores its id in .env.local as PAYPAL_WEBHOOK_ID.
-// Safe to re-run: an existing webhook for the same URL is reused. Prints no secrets.
+// Points the PayPal sandbox webhook at a URL and stores its id in .env.local as PAYPAL_WEBHOOK_ID.
+// Never creates a duplicate: reuses a webhook already at the URL, otherwise PATCHes the stored one
+// (same id, so PAYPAL_WEBHOOK_ID stays valid), and only creates when none exists. Prints no secrets.
 // Usage (from spikes/): npx tsx 03-webhook/register-webhook.ts [https-url]
-// Source: PayPal Webhooks v1 reference (POST and GET /v1/notifications/webhooks).
+// Source: PayPal Webhooks v1 reference (GET/POST /v1/notifications/webhooks, PATCH /v1/notifications/webhooks/{id}).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { requireEnvOrExit, setEnvValue } from "../lib/env.js";
+import { requireEnv, requireEnvOrExit, setEnvValue } from "../lib/env.js";
 import { getAccessToken, newRequestId, PayPalError, ppFetch } from "../lib/paypal.js";
+import { planRegistration } from "./register-plan.js";
 
-const DEFAULT_URL = "https://arbiter-q41f.onrender.com/webhook";
+const DEFAULT_URL = "https://arbiter-q41f.onrender.com/api/webhooks/paypal";
 const EVENT_TYPES = [
   "CHECKOUT.ORDER.APPROVED",
   "PAYMENT.AUTHORIZATION.CREATED",
@@ -23,18 +25,26 @@ const REQUEST_ID_FILE = new URL("webhook-register.json", OUT_DIR);
 
 type Webhook = { id: string; url: string; event_types: { name: string }[] };
 
-/** Reuses the stored PayPal-Request-Id for this URL, so a retried create stays idempotent. */
-function requestIdFor(url: string): string {
+/** Reuses the stored PayPal-Request-Id for the same action and URL, so a retried write stays idempotent. */
+function requestIdFor(action: string, url: string): string {
   try {
-    const saved = JSON.parse(readFileSync(REQUEST_ID_FILE, "utf8")) as { url?: string; requestId?: string };
-    if (saved.url === url && saved.requestId) return saved.requestId;
+    const saved = JSON.parse(readFileSync(REQUEST_ID_FILE, "utf8")) as { action?: string; url?: string; requestId?: string };
+    if (saved.action === action && saved.url === url && saved.requestId) return saved.requestId;
   } catch {
     // no stored id yet
   }
   const requestId = newRequestId();
   mkdirSync(OUT_DIR, { recursive: true });
-  writeFileSync(REQUEST_ID_FILE, JSON.stringify({ url, requestId }, null, 2));
+  writeFileSync(REQUEST_ID_FILE, JSON.stringify({ action, url, requestId }, null, 2));
   return requestId;
+}
+
+function storedWebhookId(): string | undefined {
+  try {
+    return requireEnv(["PAYPAL_WEBHOOK_ID"]).PAYPAL_WEBHOOK_ID;
+  } catch {
+    return undefined;
+  }
 }
 
 async function main() {
@@ -45,21 +55,30 @@ async function main() {
   console.log("oauth token obtained (value not printed)");
 
   const { body: list } = await ppFetch<{ webhooks?: Webhook[] }>(token, "GET", "/v1/notifications/webhooks");
-  console.log(`existing webhooks on this app: ${list.webhooks?.length ?? 0}`);
-  let webhook = list.webhooks?.find((w) => w.url === url);
-  if (webhook) {
+  const existing = (list.webhooks ?? []).map((w) => ({ id: w.id, url: w.url, eventTypes: w.event_types.map((e) => e.name) }));
+  console.log(`existing webhooks on this app: ${existing.length}`);
+
+  const plan = planRegistration({ existing, storedId: storedWebhookId(), targetUrl: url, wanted: EVENT_TYPES });
+  let id: string;
+  if (plan.action === "reuse") {
     console.log("a webhook for this url already exists; reusing it");
+    id = plan.id;
+  } else if (plan.action === "patch") {
+    console.log(`patching the stored webhook: ${plan.patch.map((p) => p.path).join(", ")}`);
+    const r = await ppFetch<Webhook>(token, "PATCH", `/v1/notifications/webhooks/${plan.id}`, { requestId: requestIdFor("patch", url), body: plan.patch });
+    console.log(`patch returned HTTP ${r.status}`);
+    id = plan.id;
   } else {
-    const created = await ppFetch<Webhook>(token, "POST", "/v1/notifications/webhooks", {
-      requestId: requestIdFor(url),
+    const r = await ppFetch<Webhook>(token, "POST", "/v1/notifications/webhooks", {
+      requestId: requestIdFor("create", url),
       body: { url, event_types: EVENT_TYPES.map((name) => ({ name })) },
     });
-    console.log(`create returned HTTP ${created.status}`);
-    webhook = created.body;
+    console.log(`create returned HTTP ${r.status}`);
+    id = r.body.id;
   }
 
-  // Read it back from PayPal rather than trusting the create response.
-  const { body: stored } = await ppFetch<Webhook>(token, "GET", `/v1/notifications/webhooks/${webhook.id}`);
+  // Read it back from PayPal rather than trusting the write response.
+  const { body: stored } = await ppFetch<Webhook>(token, "GET", `/v1/notifications/webhooks/${id}`);
   const subscribed = stored.event_types.map((e) => e.name);
   const missing = EVENT_TYPES.filter((name) => !subscribed.includes(name));
   console.log(`webhook id: ${stored.id}`);
