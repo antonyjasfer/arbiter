@@ -20,8 +20,8 @@ beforeEach(async () => {
   const projects = await db()
     .insert(s.projects)
     .values([
-      { title: "A", createdBy: client },
-      { title: "B", createdBy: outsider },
+      { title: "A", createdBy: client, brief: "brief A", budget: "100.00" },
+      { title: "B", createdBy: outsider, brief: "brief B", budget: "100.00" },
     ])
     .returning();
   [projectA, projectB] = projects.map((p) => p.id) as [string, string];

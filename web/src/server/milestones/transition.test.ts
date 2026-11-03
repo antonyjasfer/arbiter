@@ -9,9 +9,9 @@ let milestoneId: string;
 
 beforeEach(async () => {
   const [u] = await db().insert(s.users).values({ githubId: "1", login: "alice" }).returning();
-  const [p] = await db().insert(s.projects).values({ title: "P", createdBy: u!.id }).returning();
+  const [p] = await db().insert(s.projects).values({ title: "P", createdBy: u!.id, brief: "brief", budget: "50.00" }).returning();
   const [a] = await db().insert(s.agreements).values({ projectId: p!.id }).returning();
-  const [v] = await db().insert(s.agreementVersions).values({ agreementId: a!.id, version: 1, bodyJson: {}, hash: "h" }).returning();
+  const [v] = await db().insert(s.agreementVersions).values({ agreementId: a!.id, version: 1, bodyJson: {}, hash: "h", source: "manual" }).returning();
   const [m] = await db().insert(s.milestones).values({ agreementVersionId: v!.id, position: 1, title: "M", amount: "50.00" }).returning();
   milestoneId = m!.id;
 });

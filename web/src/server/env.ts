@@ -15,6 +15,11 @@ const schema = z.object({
   PAYPAL_ENVIRONMENT: z.preprocess(blankToUndefined, z.literal("SANDBOX")),
   // Optional: the webhook route answers 503 until it is set.
   PAYPAL_WEBHOOK_ID: z.preprocess(blankToUndefined, z.string().optional()),
+  GEMINI_API_KEY: required,
+  // FINDINGS: gemini-3.8-flash was overloaded on the free tier; 3.6 works.
+  GEMINI_MODEL: z.preprocess(blankToUndefined, z.string().default("gemini-3.6-flash")),
+  // Demo sign-in exists only when this is exactly "true".
+  DEMO_MODE: z.preprocess((v) => v === "true", z.boolean()),
 });
 
 export type ServerEnv = z.infer<typeof schema>;

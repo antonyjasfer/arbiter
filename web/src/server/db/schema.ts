@@ -14,6 +14,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { MILESTONE_STATES } from "../milestones/state-machine";
@@ -31,6 +32,7 @@ export const runStatus = pgEnum("run_status", ["queued", "running", "completed",
 export const verdict = pgEnum("verdict", ["pass", "fail", "needs_review"]);
 export const verdictSource = pgEnum("verdict_source", ["deterministic", "ai"]);
 export const evidenceType = pgEnum("evidence_type", ["log", "screenshot", "diff"]);
+export const compileJobStatus = pgEnum("compile_job_status", ["queued", "running", "succeeded", "failed"]);
 
 export const users = pgTable("users", {
   id: id(),
@@ -40,6 +42,8 @@ export const users = pgTable("users", {
   email: text("email"),
   avatarUrl: text("avatar_url"),
   paypalEmail: text("paypal_email"),
+  // Demo users see only demo projects, and real users never see them.
+  isDemo: boolean("is_demo").notNull().default(false),
   createdAt: createdAt(),
 });
 
@@ -49,6 +53,13 @@ export const projects = pgTable(
     id: id(),
     title: text("title").notNull(),
     createdBy: uuid("created_by").notNull().references(() => users.id),
+    isDemo: boolean("is_demo").notNull().default(false),
+    brief: text("brief").notNull(),
+    budget: money("budget").notNull(),
+    briefFlags: jsonb("brief_flags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    // Head of this project's audit chain, updated in the same transaction as each audit event.
+    auditSeq: integer("audit_seq").notNull().default(0),
+    auditHeadHash: text("audit_head_hash"),
     createdAt: createdAt(),
   },
   (t) => [index("projects_created_by_idx").on(t.createdBy)],
@@ -63,7 +74,11 @@ export const projectMembers = pgTable(
     role: memberRole("role").notNull(),
     createdAt: createdAt(),
   },
-  (t) => [unique("project_members_project_user_uq").on(t.projectId, t.userId), index("project_members_user_idx").on(t.userId)],
+  (t) => [
+    unique("project_members_project_user_uq").on(t.projectId, t.userId),
+    index("project_members_user_idx").on(t.userId),
+    uniqueIndex("project_members_one_freelancer").on(t.projectId).where(sql`${t.role} = 'freelancer'`),
+  ],
 );
 
 export const invitations = pgTable(
@@ -103,6 +118,10 @@ export const agreementVersions = pgTable(
     clientApprovedAt: ts("client_approved_at"),
     freelancerApprovedAt: ts("freelancer_approved_at"),
     hash: text("hash").notNull(),
+    createdBy: uuid("created_by").references(() => users.id),
+    source: text("source").$type<"ai" | "manual">().notNull(),
+    compileJobId: uuid("compile_job_id"),
+    lockedAt: ts("locked_at"),
     createdAt: createdAt(),
   },
   (t) => [unique("agreement_versions_agreement_version_uq").on(t.agreementId, t.version)],
@@ -245,12 +264,53 @@ export const auditEvents = pgTable(
   {
     id: id(),
     projectId: uuid("project_id").notNull().references(() => projects.id),
+    // 1, 2, 3... per project; a gap means a deleted event.
+    seq: integer("seq").notNull(),
     actorId: uuid("actor_id").references(() => users.id),
     action: text("action").notNull(),
     data: jsonb("data").notNull(),
     prevHash: text("prev_hash"),
     hash: text("hash").notNull().unique(),
-    createdAt: createdAt(),
+    // Set by the app (not defaultNow) because it is part of the hashed content.
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   },
-  (t) => [index("audit_events_project_idx").on(t.projectId), index("audit_events_actor_idx").on(t.actorId)],
+  (t) => [
+    index("audit_events_project_idx").on(t.projectId),
+    index("audit_events_actor_idx").on(t.actorId),
+    unique("audit_events_project_seq_uq").on(t.projectId, t.seq),
+  ],
 );
+
+// Agreement Compiler runs, persisted so a restart or cold start resumes them (never in-memory timers).
+export const compileJobs = pgTable(
+  "compile_jobs",
+  {
+    id: id(),
+    projectId: uuid("project_id").notNull().references(() => projects.id),
+    requestedBy: uuid("requested_by").notNull().references(() => users.id),
+    status: compileJobStatus("status").notNull().default("queued"),
+    input: jsonb("input").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: ts("next_attempt_at").notNull().defaultNow(),
+    leaseUntil: ts("lease_until"),
+    // True once a claim made a model call that missed the cache; counts toward the daily caps.
+    live: boolean("live").notNull().default(false),
+    result: jsonb("result"),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    createdAt: createdAt(),
+    finishedAt: ts("finished_at"),
+  },
+  (t) => [
+    index("compile_jobs_project_idx").on(t.projectId),
+    index("compile_jobs_requested_by_idx").on(t.requestedBy),
+    index("compile_jobs_due_idx").on(t.status, t.nextAttemptAt),
+  ],
+);
+
+export const aiCache = pgTable("ai_cache", {
+  key: char("key", { length: 64 }).primaryKey(),
+  model: text("model").notNull(),
+  value: jsonb("value").notNull(),
+  createdAt: createdAt(),
+});

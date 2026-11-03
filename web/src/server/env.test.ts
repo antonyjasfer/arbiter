@@ -9,7 +9,26 @@ const valid = {
   PAYPAL_CLIENT_ID: "pp-id-value-4",
   PAYPAL_CLIENT_SECRET: "pp-secret-value-5",
   PAYPAL_ENVIRONMENT: "SANDBOX",
+  GEMINI_API_KEY: "gemini-key-value-6",
 };
+
+describe("phase 3 variables", () => {
+  it("requires GEMINI_API_KEY", () => {
+    const rest: Record<string, string | undefined> = { ...valid };
+    delete rest.GEMINI_API_KEY;
+    expect(() => parseServerEnv(rest)).toThrow(/GEMINI_API_KEY/);
+  });
+
+  it("defaults GEMINI_MODEL to gemini-3.6-flash", () => {
+    expect(parseServerEnv(valid).GEMINI_MODEL).toBe("gemini-3.6-flash");
+    expect(parseServerEnv({ ...valid, GEMINI_MODEL: "gemini-3.8-flash" }).GEMINI_MODEL).toBe("gemini-3.8-flash");
+  });
+
+  it("turns DEMO_MODE on only for the exact string true", () => {
+    expect(parseServerEnv({ ...valid, DEMO_MODE: "true" }).DEMO_MODE).toBe(true);
+    for (const v of ["TRUE", "1", "yes", "", undefined]) expect(parseServerEnv({ ...valid, DEMO_MODE: v }).DEMO_MODE).toBe(false);
+  });
+});
 
 describe("parseServerEnv", () => {
   it("parses a complete environment and leaves PAYPAL_WEBHOOK_ID optional", () => {

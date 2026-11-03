@@ -19,6 +19,12 @@ describe("milestone transition table", () => {
     expect(legal).toBe(18);
   });
 
+  it("says who must act: both parties to agree, either party to disagree", () => {
+    expect(TRANSITIONS.find((t) => t.event === "both_approved")?.actor).toBe("both_required");
+    expect(TRANSITIONS.find((t) => t.event === "disagree")?.actor).toBe("either_party");
+    expect(TRANSITIONS.filter((t) => (t.actor as string) === "both")).toEqual([]);
+  });
+
   it("has no transitions out of PAID or CANCELLED", () => {
     expect(TRANSITIONS.filter((t) => t.from === "PAID" || t.from === "CANCELLED")).toEqual([]);
   });

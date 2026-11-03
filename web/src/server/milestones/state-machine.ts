@@ -37,13 +37,14 @@ export const MILESTONE_EVENTS = [
 ] as const;
 
 export type MilestoneEvent = (typeof MILESTONE_EVENTS)[number];
-export type TransitionActor = "client" | "freelancer" | "both" | "system";
+// both_required: both parties must act before the move happens; either_party: one party acting is enough.
+export type TransitionActor = "client" | "freelancer" | "both_required" | "either_party" | "system";
 
 // The only legal moves. Anything not listed is rejected.
 // Phase 5 note: an authorization can also be lost while SUBMITTED, VERIFYING, REPORT_READY or DISPUTED;
 // that path is designed in Phase 5 and deliberately not added here.
 export const TRANSITIONS: readonly { from: MilestoneState; event: MilestoneEvent; to: MilestoneState; actor: TransitionActor }[] = [
-  { from: "DRAFT", event: "both_approved", to: "AGREED", actor: "both" },
+  { from: "DRAFT", event: "both_approved", to: "AGREED", actor: "both_required" },
   { from: "AGREED", event: "authorized", to: "FUNDED", actor: "system" },
   { from: "FUNDED", event: "authorization_lost", to: "AGREED", actor: "system" },
   { from: "FUNDED", event: "cancel", to: "CANCELLED", actor: "client" },
@@ -53,7 +54,7 @@ export const TRANSITIONS: readonly { from: MilestoneState; event: MilestoneEvent
   { from: "VERIFYING", event: "run_errored", to: "SUBMITTED", actor: "system" },
   { from: "REPORT_READY", event: "resubmit", to: "SUBMITTED", actor: "freelancer" },
   { from: "REPORT_READY", event: "approve", to: "APPROVED", actor: "client" },
-  { from: "REPORT_READY", event: "disagree", to: "DISPUTED", actor: "both" },
+  { from: "REPORT_READY", event: "disagree", to: "DISPUTED", actor: "either_party" },
   { from: "DISPUTED", event: "approve", to: "APPROVED", actor: "client" },
   { from: "DISPUTED", event: "cancel", to: "CANCELLED", actor: "client" },
   // Payout waits for a COMPLETED capture: PAID is reachable only through RELEASED.
