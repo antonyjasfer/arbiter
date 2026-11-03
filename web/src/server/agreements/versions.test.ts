@@ -1,0 +1,158 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { canonicalJson, sha256Hex } from "@/lib/canonical-json";
+import { setupTestDb } from "../db/test-db";
+import * as s from "../db/schema";
+import { verifyChain } from "../audit/audit";
+import { createProject } from "../projects/projects";
+import { acceptInvite, createInvite } from "../projects/invitations";
+import type { AgreementBody } from "./body";
+import { checkCompilerOutput } from "./compiler";
+import { applyCompileResult, approve, getCurrentVersion, saveEdit } from "./versions";
+
+const db = setupTestDb();
+const brief = "A small task-list web app with add, complete and filter, and a health check.";
+let client: string, freelancer: string, outsider: string, projectId: string;
+
+function sampleBody(): AgreementBody {
+  const r = checkCompilerOutput(
+    {
+      milestones: [
+        { title: "Working app, deployed", amount_cents: 15000, due_in_days: 7, criteria: [{ kind: "browser", text: "Adding Buy milk shows it." }, { kind: "review", text: "Easy to use." }] },
+        { title: "Filters, validation and README", amount_cents: 15000, due_in_days: 14, criteria: [{ kind: "static", text: "README explains how to run it." }] },
+      ],
+      questions: [],
+    },
+    30000,
+  );
+  if (!r.ok) throw new Error("sample body");
+  return r.value;
+}
+
+beforeEach(async () => {
+  const users = await db()
+    .insert(s.users)
+    .values([
+      { githubId: "1", login: "client" },
+      { githubId: "2", login: "freelancer" },
+      { githubId: "3", login: "outsider" },
+    ])
+    .returning();
+  [client, freelancer, outsider] = users.map((u) => u.id) as [string, string, string];
+  const p = await createProject(db(), { userId: client, title: "TaskBoard", brief, budgetCents: 30000 });
+  if (!p.ok) throw new Error("setup");
+  projectId = p.value.projectId;
+  const inv = await createInvite(db(), { userId: client, projectId });
+  if (!inv.ok) throw new Error("setup");
+  await acceptInvite(db(), { userId: freelancer, token: inv.value.token });
+  await db().transaction((tx) => applyCompileResult(tx, { projectId, userId: client, body: sampleBody(), jobId: null }));
+});
+
+async function current(userId = client) {
+  const r = await getCurrentVersion(db(), { userId, projectId });
+  if (!r.ok || !r.value) throw new Error("no current version");
+  return r.value;
+}
+
+describe("applyCompileResult and getCurrentVersion", () => {
+  it("creates version 1 from AI output with a canonical hash and per-milestone fees", async () => {
+    const v = await current();
+    expect(v).toMatchObject({ version: 1, source: "ai", clientApprovedAt: null, freelancerApprovedAt: null, locked: false });
+    expect(v.hash).toBe(sha256Hex(canonicalJson({ projectId, version: 1, body: v.body })));
+    expect(v.fees).toEqual([
+      { key: "m1", feeCents: 850, payoutCents: 14150 },
+      { key: "m2", feeCents: 850, payoutCents: 14150 },
+    ]);
+    expect((await current(freelancer)).hash).toBe(v.hash);
+  });
+
+  it("hides the agreement from non-members", async () => {
+    expect(await getCurrentVersion(db(), { userId: outsider, projectId })).toEqual({ ok: false, error: { code: "not_member" } });
+    expect(await getCurrentVersion(db(), { userId: client, projectId: "nope" })).toEqual({ ok: false, error: { code: "not_member" } });
+  });
+});
+
+describe("saveEdit", () => {
+  it("edits in place while nobody has approved", async () => {
+    const v1 = await current();
+    const body = structuredClone(v1.body);
+    body.milestones[0]!.title = "Working app, deployed on Render";
+    const r = await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body });
+    expect(r.ok).toBe(true);
+    const v = await current();
+    expect(v.version).toBe(1);
+    expect(v.source).toBe("manual");
+    expect(v.hash).not.toBe(v1.hash);
+    expect(v.body.milestones[0]!.title).toBe("Working app, deployed on Render");
+  });
+
+  it("creates a new version and clears approvals when someone had already approved", async () => {
+    const v1 = await current();
+    expect((await approve(db(), { userId: client, projectId, expectedHash: v1.hash })).ok).toBe(true);
+    const body = structuredClone(v1.body);
+    body.milestones[1]!.criteria[0]!.text = "README explains how to run and test it.";
+    expect((await saveEdit(db(), { userId: client, projectId, expectedHash: (await current()).hash, body })).ok).toBe(true);
+    const v2 = await current();
+    expect(v2).toMatchObject({ version: 2, clientApprovedAt: null, freelancerApprovedAt: null });
+    // The freelancer's tab still shows version 1.
+    expect(await approve(db(), { userId: freelancer, projectId, expectedHash: v1.hash })).toEqual({ ok: false, error: { code: "stale" } });
+  });
+
+  it("refuses a stale base, a freelancer editor and a body that breaks the budget", async () => {
+    const v1 = await current();
+    expect(await saveEdit(db(), { userId: client, projectId, expectedHash: "0".repeat(64), body: v1.body })).toEqual({ ok: false, error: { code: "stale" } });
+    expect(await saveEdit(db(), { userId: freelancer, projectId, expectedHash: v1.hash, body: v1.body })).toEqual({ ok: false, error: { code: "forbidden" } });
+    const bad = structuredClone(v1.body);
+    bad.milestones[0]!.amountCents = 15001;
+    expect(await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body: bad })).toEqual({
+      ok: false,
+      error: { code: "invalid_body", problems: [{ code: "sum_mismatch" }] },
+    });
+  });
+});
+
+describe("approve and lock", () => {
+  it("locks once both approve: milestones AGREED, criteria stored, audit chain intact", async () => {
+    const v = await current();
+    expect(await approve(db(), { userId: client, projectId, expectedHash: v.hash })).toEqual({ ok: true, value: { locked: false } });
+    expect(await approve(db(), { userId: freelancer, projectId, expectedHash: v.hash })).toEqual({ ok: true, value: { locked: true } });
+
+    const after = await current();
+    expect(after.locked).toBe(true);
+    const ms = await db().select().from(s.milestones).where(eq(s.milestones.agreementVersionId, after.id)).orderBy(s.milestones.position);
+    expect(ms.map((m) => [m.position, m.title, m.amount, m.state, m.stateVersion])).toEqual([
+      [1, "Working app, deployed", "150.00", "AGREED", 1],
+      [2, "Filters, validation and README", "150.00", "AGREED", 1],
+    ]);
+    const crit = await db().select().from(s.acceptanceCriteria).where(eq(s.acceptanceCriteria.milestoneId, ms[0]!.id));
+    expect(crit.map((c) => c.kind).sort()).toEqual(["browser", "review"]);
+    const [agreement] = await db().select().from(s.agreements).where(eq(s.agreements.projectId, projectId));
+    expect(agreement!.status).toBe("locked");
+
+    const actions = (await db().select().from(s.auditEvents).where(eq(s.auditEvents.projectId, projectId)).orderBy(s.auditEvents.seq)).map((e) => e.action);
+    expect(actions.slice(-3)).toEqual(["approved", "approved", "locked"]);
+    expect(await verifyChain(db(), projectId)).toMatchObject({ ok: true });
+  });
+
+  it("refuses edits and further approvals after the lock", async () => {
+    const v = await current();
+    await approve(db(), { userId: client, projectId, expectedHash: v.hash });
+    await approve(db(), { userId: freelancer, projectId, expectedHash: v.hash });
+    expect(await saveEdit(db(), { userId: client, projectId, expectedHash: v.hash, body: v.body })).toEqual({ ok: false, error: { code: "locked" } });
+    expect(await approve(db(), { userId: client, projectId, expectedHash: v.hash })).toEqual({ ok: false, error: { code: "locked" } });
+    await expect(db().transaction((tx) => applyCompileResult(tx, { projectId, userId: client, body: v.body, jobId: null }))).rejects.toThrow(/locked/);
+  });
+
+  it("treats a second approval by the same party as a no-op", async () => {
+    const v = await current();
+    await approve(db(), { userId: client, projectId, expectedHash: v.hash });
+    expect(await approve(db(), { userId: client, projectId, expectedHash: v.hash })).toEqual({ ok: true, value: { locked: false } });
+    const approvals = (await db().select().from(s.auditEvents).where(eq(s.auditEvents.projectId, projectId))).filter((e) => e.action === "approved");
+    expect(approvals).toHaveLength(1);
+  });
+
+  it("refuses outsiders", async () => {
+    const v = await current();
+    expect(await approve(db(), { userId: outsider, projectId, expectedHash: v.hash })).toEqual({ ok: false, error: { code: "not_member" } });
+  });
+});
