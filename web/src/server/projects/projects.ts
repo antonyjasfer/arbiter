@@ -3,6 +3,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Result } from "@/lib/result";
+import { flagBrief } from "../agreements/brief-flags";
 import { appendAudit } from "../audit/audit";
 import type { Db } from "../db/types";
 import { projectMembers, projects, users } from "../db/schema";
@@ -19,7 +20,7 @@ export const projectInputSchema = z.object({
 
 export async function createProject(
   db: Db,
-  args: { userId: string; title: string; brief: string; budgetCents: number; briefFlags?: string[] },
+  args: { userId: string; title: string; brief: string; budgetCents: number },
 ): Promise<Result<{ projectId: string }, "invalid_input">> {
   const input = projectInputSchema.safeParse(args);
   if (!input.success) return { ok: false, error: "invalid_input" };
@@ -29,7 +30,7 @@ export async function createProject(
     if (!user) return { ok: false, error: "invalid_input" } as const;
     const [p] = await tx
       .insert(projects)
-      .values({ title, brief, budget: centsToMoney(budgetCents), createdBy: args.userId, isDemo: user.isDemo, briefFlags: args.briefFlags ?? [] })
+      .values({ title, brief, budget: centsToMoney(budgetCents), createdBy: args.userId, isDemo: user.isDemo, briefFlags: flagBrief(brief) })
       .returning({ id: projects.id });
     await tx.insert(projectMembers).values({ projectId: p!.id, userId: args.userId, role: "client" });
     // The brief itself stays out of the audit log; the version hash covers the agreement later.
