@@ -59,7 +59,7 @@ Database tests run against PGlite (in-process Postgres) with the real migrations
 
 ## Deploy (Render Free, Virginia)
 
-`render.yaml` declares the `arbiter` web service: root directory `web`, build `npm ci && npm run build`, start `npm run start`, health check `/api/health`. Secrets are set in the Render dashboard, never in the file: `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` (live OAuth app), `DATABASE_URL`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`; plus `PAYPAL_ENVIRONMENT=SANDBOX` and `NODE_VERSION=24`.
+`render.yaml` declares the `arbiter` web service: root directory `web`, build `npm ci && npm run build`, start `npm run start`, health check `/api/health`. Secrets are set in the Render dashboard, never in the file: `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` (live OAuth app), `DATABASE_URL`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`; plus `PAYPAL_ENVIRONMENT=SANDBOX`, `NODE_VERSION=24` and `AUTH_URL=https://arbiter-q41f.onrender.com`. `AUTH_URL` is required on Render: without it Auth.js builds the GitHub callback from the proxied host header (`https://localhost:10000`) and GitHub rejects the sign-in.
 
 `render.yaml` is a record, not a synced Blueprint: syncing it would create a second, suffixed service rather than adopt the existing dashboard-created one, so the same settings are applied in the dashboard.
 

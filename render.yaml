@@ -19,6 +19,9 @@ services:
         value: "24"
       - key: PAYPAL_ENVIRONMENT
         value: SANDBOX
+      # Auth.js otherwise builds callback URLs from Render's internal host (localhost:10000).
+      - key: AUTH_URL
+        value: https://arbiter-q41f.onrender.com
       - key: AUTH_SECRET
         sync: false
       - key: AUTH_GITHUB_ID
