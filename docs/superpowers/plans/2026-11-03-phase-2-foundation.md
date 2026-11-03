@@ -137,7 +137,7 @@
 | CAPTURE_PENDING | capture_denied | APPROVED | system |
 | RELEASED | payout_succeeded | PAID | system |
 
-New against section 7: `FUNDED→AGREED` (authorization expired or voided by PayPal, must re-fund), `VERIFYING→SUBMITTED` (runner infrastructure error, so a retry is allowed), and the three `CAPTURE_PENDING` rows (Phase 1 finding). `capture_denied` returning to `APPROVED` lets the client retry or cancel in Phase 5; re-check this with PayPal behaviour then.
+New against section 7: `FUNDED→AGREED` (authorization expired or voided by PayPal, must re-fund), `VERIFYING→SUBMITTED` (runner infrastructure error, so a retry is allowed), and the three `CAPTURE_PENDING` rows (Phase 1 finding). `capture_denied` returning to `APPROVED` lets the client retry or cancel in Phase 5; re-check this with PayPal behaviour then. Phase 5 note (user, 3 Nov): an authorization can also be lost while SUBMITTED, VERIFYING, REPORT_READY or DISPUTED; Phase 5 designs that path (e.g. an "authorization lost, re-fund needed" state). Do not add those transitions in Phase 2.
 - `nextState(from: MilestoneState, event: MilestoneEvent): Result<MilestoneState, "illegal_transition">` with `type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }` (exported from `web/src/lib/result.ts`).
 - `transitionMilestone(db, args: { milestoneId: string; expectedState: MilestoneState; expectedVersion: number; event: MilestoneEvent }): Promise<Result<{ state: MilestoneState; stateVersion: number }, "illegal_transition" | "conflict">>`. It runs one `UPDATE … SET state = $to, state_version = state_version + 1 WHERE id = $id AND state = $expected AND state_version = $n RETURNING`. Zero rows returns `conflict`.
 
