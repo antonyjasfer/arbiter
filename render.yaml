@@ -1,0 +1,35 @@
+# Declared configuration of the existing Render service "arbiter" (Free, Virginia).
+# Not synced as a Blueprint: syncing would create a second, suffixed service instead of adopting the
+# dashboard-created one (Render docs, "Blueprint YAML": new Blueprint resources get a suffix on name
+# collision). The same settings are applied by hand in the dashboard. Secrets are never in this file.
+services:
+  - type: web
+    name: arbiter
+    runtime: node
+    plan: free
+    region: virginia
+    branch: main
+    autoDeploy: true
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: PAYPAL_ENVIRONMENT
+        value: SANDBOX
+      - key: AUTH_SECRET
+        sync: false
+      - key: AUTH_GITHUB_ID
+        sync: false
+      - key: AUTH_GITHUB_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
