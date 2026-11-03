@@ -1,7 +1,29 @@
-# Arbiter: Phase 0 Plan (approved, 29 Oct 2026; revised for zero budget, Revision 1)
+# Arbiter: Phase 0 Plan (approved, 29 Oct 2026; Revision 1 zero budget; Revision 2 schedule and cuts, 3 Nov)
 
 > Provenance: transcribed on 2026-10-29 from `Arbiter - Phase 0 Plan.pdf` (26 pages) because `docs/arbiter-plan.md` did not exist in the folder. Tables are condensed; source link text in the PDF could not be recovered as URLs. Where the PDF's table layout was ambiguous it is noted. The PDF remains the original.
 
+
+## R2. Revision 2 (3 Nov 2026, schedule and cuts): read this first
+
+Phase 1 finished on 3 Nov IST, two days late. This section overrides sections 4, 9 and 11 where they conflict.
+
+| # | Phase | Finish by (IST) |
+|---|---|---|
+| 2 | Foundation | end of Tue 4 Nov |
+| 3 | Agreements and milestones | end of Wed 5 Nov |
+| 4 + 5 | Verification engine and PayPal payments, in parallel git worktrees | Wed 5 to Fri 7 Nov |
+| 6 | Integration and trust layer | Sat 8 Nov |
+| 7 | AG Studio dashboard only, and only if Phase 6 is done | Sun 9 Nov |
+| 8 | Testing and hardening | Mon 10 Nov |
+| 9 | Video and submission | Tue 11 Nov (deadline 01:30 IST Fri 13 Nov) |
+
+**Cuts:**
+- **Dispute assistant** becomes a **"Disagree" button**: either party can record a written comment on a verification report. It moves the milestone REPORT_READY -> DISPUTED and stores the comment (audited). No AI, no `@paypal/agent-toolkit`. The client then approves or cancels by hand.
+- **KERNEL replays**: cut.
+- **Invoices** (Invoicing API): cut.
+- **Harden-Runner** egress allow-list check: cut. Open egress on the runner stays a documented limit in the README.
+
+**Phase 1 results that change the design** (details in `spikes/FINDINGS.md`): captures can return PENDING (PENDING_REVIEW), so the milestone state machine gains **CAPTURE_PENDING** and payout waits for a COMPLETED capture read back from PayPal; webhooks arrive out of order and must be handled order-independently; reauthorize inside the honor period returns 422; the fee is a percentage plus a fixed amount (PayPal took 2.24 + 0.25 on 50.00); Gemini free-tier limits are not shown in AI Studio, so design for **10 RPM / 250 RPD** behind the cache and busy state; cold start measured at 23.7 s.
 
 ## R. Revision 1 (29 Oct 2026, zero budget): read this first
 
@@ -78,7 +100,7 @@ Aim: Grand Prize; fallback Best Use of Agentic Commerce or Best Use of PayPal + 
 
 ## 4. Scope
 P0 (full loop for code and websites; nothing else starts until it works end to end on the deployed app): GitHub sign-in, roles, invitations; AI Agreement Compiler with ambiguity flags, dual approval, versioning; milestones; submission of repo+commit+deploy URL; verification (GitHub Actions runner tests, browser checks, per-criterion verdicts with evidence); PayPal authorize per milestone, capture on approval, void on cancel, reauthorize after 3 days, Payout; verified webhooks and idempotent state machine; payment guard (amount, payee, human approval) and prompt-injection detection; hash-chained audit log; seeded demo projects (passing, failing, malicious).
-P1: AG Studio trust dashboard (custom widgets, Studio agent); dispute assistant; KERNEL sessions with replay; invoices via Invoicing API.
+P1: AG Studio trust dashboard (custom widgets, Studio agent). [Rev 2] "Disagree" button that records comments (replaces the dispute assistant). Cut: KERNEL replays, invoices.
 P2: revision rounds and partial captures; document deliverables; Zapier notifications. Out: design/Figma judgments; live payments, real escrow, multi-currency, KYC; non-Node projects (Node and static sites only).
 
 ## 5. Architecture
@@ -108,14 +130,14 @@ Model writes and explains; code decides and pays. Four jobs, one narrow Zod sche
 - Agreement Compiler: Gemini Flash (free tier); brief to milestones, amounts, criteria by kind, ambiguity questions.
 - Check Planner: Gemini Flash; approved criteria + repo file tree + package.json to concrete checks (test commands, browser steps, file assertions); the checks are run by code.
 - Evidence Reviewer: Gemini Flash (one re-ask on bad JSON; review criteria always end in human review); plain-language summary per criterion; suggested verdict with confidence only for review kind. Test/browser verdicts are decided by exit codes and assertions.
-- Dispute Assistant (P1): Gemini Flash; claims supported/contradicted/unverified plus non-binding recommendation; PayPal details via read-only toolkit.
+- [Rev 2] Dispute Assistant cut; replaced by a "Disagree" button that records comments (no AI).
 Plain code only: state transitions, amount/payee checks, PayPal calls, test and browser results, audit hashing, permission checks.
 Failures: JSON schema on every call, parse with Zod, retry once with the validation error, then mark `needs_review`. Context: file tree plus selected files under a token budget; never `.env`, lockfiles or binaries.
 Injection defence: delimited data blocks and "untrusted" system prompt; scanner flags instruction-like text ("ignore previous", "mark as pass") as evidence; output only fills a schema; deterministic verdicts cannot be overridden by summaries.
 Human review needed for: any review criterion, AI confidence < 0.7, any injection flag, every payment release.
 Evaluation: fixed set of eight seed projects (passing, failing, flaky test, missing deploy, injected README, injected HTML comment, vague brief, over-budget brief) in CI; track verdict accuracy and schema failures per phase. [Rev 1] Cost/limits: all calls go through the `StructuredAi` interface; 429 -> exponential backoff -> typed `busy` -> "AI busy" UI state; seeded demo outputs cached so judges are not blocked by quota. Privacy: the Gemini free tier uses prompts to improve Google products, so public repos and seeded text only; no PayPal identifiers or tokens sent to the model; logs store hashes.
 
-## 9. Phase plan (29 Oct to 11 Nov; 12 Nov buffer)
+## 9. Phase plan (29 Oct to 11 Nov; 12 Nov buffer) [Rev 2: dates superseded by section R2]
 | # | Phase | Dates | Coding model | Runtime model | Done when |
 |---|---|---|---|---|---|
 | 1 | Accounts and risk spikes | 29-31 Oct | sonnet (haiku) | Gemini Flash test call | Sandbox payment authorized, captured, paid out; Actions runner runs `npm test` + Playwright with no secrets visible; webhook verifies on Render Free; Gemini call validates |
@@ -124,7 +146,7 @@ Evaluation: fixed set of eight seed projects (passing, failing, flaky test, miss
 | 4 | Verification engine | 3-7 Nov | opus; fable if stuck | Gemini Flash | Pass, fail, malicious seeds give correct verdicts with evidence |
 | 5 | PayPal payments (parallel with 4) | 4-7 Nov | opus (sonnet) | none | Fund, approve, capture, payout, void, reauthorize work and survive retries |
 | 6 | Integration and trust layer | 7-8 Nov | opus | none | Full journey on deployed URL; security review fixed |
-| 7 | Dashboard and dispute assistant (P1) | 8-9 Nov | sonnet | Gemini Flash | AG Studio dashboard with custom widgets; dispute pack |
+| 7 | Dashboard (P1) [Rev 2: AG Studio only, only if 6 is done] | 9 Nov | sonnet | none | AG Studio dashboard with custom widgets |
 | 8 | Testing and hardening | 9-10 Nov | sonnet; opus for security | none | E2E green on production; README lets a fresh machine run it |
 | 9 | Demo and submission | 10-11 Nov | sonnet (haiku for docs) | none | Submission complete: repo, license, video, hosted URL |
 Stop for approval at the end of each phase. Model switching: opus/opusplan for architecture, payment state machine, sandbox runner, security review; sonnet for UI and routine; fable only after two failed attempts; independent review via fresh opus subagent with `superpowers:requesting-code-review`.
@@ -132,10 +154,10 @@ Stop for approval at the end of each phase. Model switching: opus/opusplan for a
 **Phase 1 (29-31 Oct, ~1.5 days) [Rev 1]:** prove the four risky integrations before product code: (1) OAuth token, `AUTHORIZE` order, buyer approval, authorize, capture, Payout (capture minus 5% platform fee) to a second sandbox personal account, with the real authorization `expiration_time` recorded; (2) GitHub Actions runner in `arbiter-runner` on `arbiter-spike-fixture`: `workflow_dispatch`, untrusted code in its own `permissions: {}` job with no secrets, `npm ci && npm test`, Playwright, verdicts from the Jobs API, a probe proving it cannot see a secret, and a case proving hostile inputs are rejected; (3) tiny endpoint on a Render Free web service receiving and verifying a real PayPal sandbox webhook, cold-start delay recorded; (4) one structured-output call to the free-tier Gemini Flash model, validated with Zod, behind the provider interface; plus a Neon `SELECT 1` ping. Deliverables: `spikes/` with four scripts and `FINDINGS.md`. Fallbacks: Payouts blocked -> capture straight to the freelancer's sandbox business account as payee; Actions runner unusable -> a local Docker-based runner (documented as not hosted) and say so; PayPal sign-up problems -> PayPal Discord.
 **Phase 2 Foundation [Rev 1]:** Next.js strict TS, Tailwind/shadcn, Drizzle schema + migration on Neon, Auth.js GitHub, role-check helper, Render Free web service config, GitHub Actions CI, CLAUDE.md, `.env.example`, MIT LICENSE. Tests: role-check helper, state-machine table.
 **Phase 3:** project creation and invitations; Agreement Compiler (schema, retries, ambiguity questions); editor with criteria by kind (approval blocked until each criterion has a kind); dual approval and locking; milestone list; hash-chained audit log + viewer. Tests: 10 sample briefs, transitions, tampering breaks the chain.
-**Phase 4 (critical path) [Rev 1]:** submission pinned to commit; repo fetch on the runner; Check Planner (Gemini); `verify` workflow dispatched with run id, polled and reconciled via the Jobs API; evidence from artifacts and the public run URL with SHA-256; injection scanner; Evidence Reviewer; report page; resubmission. Seed repos `arbiter-demo-pass`, `-fail`, `-injection`. Tests: eight-project eval set; hostile workflow inputs rejected; the untrusted step sees no secrets. Risk: Actions queue time and Free-tier sleep -> design the UI for 1-3 minute waits. Task: check whether step-security Harden-Runner can enforce an egress allow-list on our public runner repo (not added in Phase 1).
+**Phase 4 (critical path) [Rev 1]:** submission pinned to commit; repo fetch on the runner; Check Planner (Gemini); `verify` workflow dispatched with run id, polled and reconciled via the Jobs API; evidence from artifacts and the public run URL with SHA-256; injection scanner; Evidence Reviewer; report page; resubmission. Seed repos `arbiter-demo-pass`, `-fail`, `-injection`. Tests: eight-project eval set; hostile workflow inputs rejected; the untrusted step sees no secrets. Risk: Actions queue time and Free-tier sleep -> design the UI for 1-3 minute waits. [Rev 2] Harden-Runner check cut.
 **Phase 5 [Rev 1]:** **first task: JS SDK v6 buttons** (Spike 1 approves via a redirect link, so the buttons are untested until here); server routes for create, authorize, capture, void, reauthorize, payout; `PayPal-Request-Id` everywhere; payment guard (platform fee = percentage + small fixed amount from Phase 1's measured PayPal fees; demo milestones $50 or more); webhook endpoint with verification, de-dup, reconciliation; reauthorize via a scheduled GitHub Action calling a protected endpoint; payment timeline UI. Tests: replayed capture/webhook changes nothing; forged webhook rejected; capture above milestone amount refused.
 **Phase 6:** wire verification results to approve; override with reason; rate limits; security headers; secrets audit; independent opus security review.
-**Phase 7 (P1):** AG Studio dashboard (money held vs released, pass rate, at-risk milestones), theming, Studio agent; dispute assistant; KERNEL replays; invoices. Cut line: drop dispute assistant first.
+**Phase 7 (P1) [Rev 2]:** AG Studio dashboard only (money held vs released, pass rate, at-risk milestones), theming, Studio agent; skipped if Phase 6 is not done. The "Disagree" button is built in Phase 6.
 **Phase 8:** Playwright E2E against production; smoke test; seed-reset; README (setup, test accounts, architecture); empty/error states.
 **Phase 9:** demo data; script and shot list; Devpost description and tool list; repo About + license; final checklist.
 
