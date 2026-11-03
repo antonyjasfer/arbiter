@@ -45,6 +45,22 @@ describe("requireProjectRole", () => {
     expect(await requireProjectRole(db(), { userId: outsider, projectId: projectA, allowed: ["client", "freelancer"] })).toEqual({ ok: false, error: "not_member" });
   });
 
+  it("treats a malformed project id as not a member, without querying with it", async () => {
+    expect(await requireProjectRole(db(), { userId: client, projectId: "1 or 1=1", allowed: ["client"] })).toEqual({ ok: false, error: "not_member" });
+  });
+
+  it("never lets a demo user act on a real project, even with a membership row", async () => {
+    const [demo] = await db().insert(s.users).values({ githubId: "demo:x", login: "demo", isDemo: true }).returning();
+    await db().insert(s.projectMembers).values({ projectId: projectB, userId: demo!.id, role: "client" });
+    expect(await requireProjectRole(db(), { userId: demo!.id, projectId: projectB, allowed: ["client"] })).toEqual({ ok: false, error: "not_member" });
+  });
+
+  it("never lets a real user act on a demo project, even with a membership row", async () => {
+    const [demoProject] = await db().insert(s.projects).values({ title: "D", createdBy: client, brief: "b", budget: "100.00", isDemo: true }).returning();
+    await db().insert(s.projectMembers).values({ projectId: demoProject!.id, userId: client, role: "client" });
+    expect(await requireProjectRole(db(), { userId: client, projectId: demoProject!.id, allowed: ["client"] })).toEqual({ ok: false, error: "not_member" });
+  });
+
   it("does not carry membership across projects", async () => {
     expect(await requireProjectRole(db(), { userId: client, projectId: projectB, allowed: ["client"] })).toEqual({ ok: false, error: "not_member" });
   });
