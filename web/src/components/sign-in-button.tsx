@@ -1,6 +1,17 @@
+import { signIn } from "@/auth";
 import { Button } from "@/components/ui/button";
 
-// Wired to Auth.js in Task 5.
 export function SignInButton() {
-  return <Button size="lg">Sign in with GitHub</Button>;
+  return (
+    <form
+      action={async () => {
+        "use server";
+        await signIn("github", { redirectTo: "/dashboard" });
+      }}
+    >
+      <Button size="lg" type="submit">
+        Sign in with GitHub
+      </Button>
+    </form>
+  );
 }

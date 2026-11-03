@@ -1,11 +1,18 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { auth } from "@/auth";
 import { RoleSwitcher } from "@/components/role-switcher";
+import { UserMenu } from "@/components/user-menu";
 import { getActiveRole } from "@/server/active-role";
 
 async function HeaderControls() {
-  const role = await getActiveRole();
-  return <RoleSwitcher active={role} />;
+  const [role, session] = await Promise.all([getActiveRole(), auth()]);
+  return (
+    <div className="flex items-center gap-4">
+      <RoleSwitcher active={role} />
+      {session?.user ? <UserMenu name={session.user.name ?? "Signed in"} image={session.user.image} /> : null}
+    </div>
+  );
 }
 
 export default function AppLayout({ children }: LayoutProps<"/">) {
