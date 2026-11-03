@@ -14,4 +14,8 @@ loadRootEnvIfPresent(path.resolve(process.cwd(), ".."), {
 });
 if (process.env.NEXT_PHASE !== "phase-production-build") {
   checkEnvOrExit(serverEnv, { exit: (code) => process.exit(code), error: (message) => console.error(message) });
+  // 3. Resume compile jobs left unfinished by a restart or cold start (status polls also resume them).
+  void Promise.all([import("@/server/agreements/compile-jobs"), import("@/server/ai/default-ai"), import("@/server/db/client")])
+    .then(([jobs, ai, db]) => jobs.resumeDueJobs(db.getDb(), ai.getAi()))
+    .catch((e: unknown) => console.error("compile-jobs resume on boot failed:", e instanceof Error ? e.name : "error"));
 }
