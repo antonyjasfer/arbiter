@@ -1,0 +1,61 @@
+// POST /api/webhooks/paypal. Verify with PayPal (over the raw body), store once, reconcile by fetch.
+// Answers: 503 not configured, 400 bad or unverified request, 200 stored or duplicate, 500 our failure (PayPal retries).
+import { createHash } from "node:crypto";
+import type { Db } from "../db/types";
+import { reconcileEvent } from "./reconcile";
+import { parseWebhookEvent } from "./webhook-event";
+import { recordEvent } from "./webhook-store";
+import { buildVerifyBody } from "./webhook-verify";
+
+export type WebhookDeps = {
+  db: Db;
+  webhookId: string | undefined;
+  /** POSTs the verify body to PayPal and returns verification_status. */
+  verify: (verifyBody: string) => Promise<string>;
+  /** Read-only GET of a PayPal resource path. */
+  fetchResource: (path: string) => Promise<unknown>;
+  log: (line: string) => void;
+};
+
+const json = (status: number, body: unknown) => Response.json(body, { status });
+
+export async function handlePaypalWebhook(request: Request, deps: WebhookDeps): Promise<Response> {
+  if (!deps.webhookId) return json(503, { error: "webhook_id not configured" });
+
+  const raw = await request.text();
+  const parsed = parseWebhookEvent(raw);
+  const label = parsed.ok ? `event=${parsed.value.eventId} type=${parsed.value.eventType}` : "event=? type=?";
+
+  let verifyBody: string;
+  try {
+    verifyBody = buildVerifyBody(Object.fromEntries(request.headers), raw, deps.webhookId);
+  } catch (e) {
+    deps.log(`${label} verification=BAD_REQUEST reason=${(e as Error).message}`);
+    return json(400, { error: "invalid webhook request" });
+  }
+
+  try {
+    const status = await deps.verify(verifyBody);
+    deps.log(`${label} verification=${status}`);
+    if (status !== "SUCCESS") return json(400, { error: "signature verification failed" });
+    if (!parsed.ok) return json(400, { error: "invalid event" });
+
+    const e = parsed.value;
+    const stored = await recordEvent(deps.db, {
+      paypalEventId: e.eventId,
+      eventType: e.eventType,
+      resourceType: e.resourceType,
+      resourceId: e.resourceId,
+      payloadSha256: createHash("sha256").update(raw, "utf8").digest("hex"),
+    });
+    if (!stored.inserted) {
+      deps.log(`${label} duplicate=true`);
+      return json(200, { ok: true, duplicate: true });
+    }
+    await reconcileEvent(deps.db, { id: stored.id, resourceType: e.resourceType, resourceId: e.resourceId }, deps.fetchResource);
+    return json(200, { ok: true, duplicate: false });
+  } catch (e) {
+    deps.log(`${label} error=${(e as Error).message}`);
+    return json(500, { error: "internal error" });
+  }
+}

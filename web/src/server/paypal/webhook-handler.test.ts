@@ -1,0 +1,89 @@
+import { describe, expect, it } from "vitest";
+import { setupTestDb } from "../db/test-db";
+import * as s from "../db/schema";
+import { handlePaypalWebhook, type WebhookDeps } from "./webhook-handler";
+
+const db = setupTestDb();
+
+const HEADERS = {
+  "content-type": "application/json",
+  "paypal-auth-algo": "SHA256withRSA",
+  "paypal-cert-url": "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
+  "paypal-transmission-id": "tx-1",
+  "paypal-transmission-sig": "c2ln",
+  "paypal-transmission-time": "2026-11-03T00:00:00Z",
+};
+const BODY = JSON.stringify({ id: "WH-9", event_type: "PAYMENT.CAPTURE.PENDING", resource_type: "capture", resource: { id: "C9" } });
+const req = (headers: Record<string, string> = HEADERS, body = BODY) => new Request("https://x/api/webhooks/paypal", { method: "POST", headers, body });
+
+function deps(over: Partial<WebhookDeps> = {}) {
+  const calls = { verify: [] as string[], fetch: [] as string[] };
+  const d: WebhookDeps = {
+    db: db(),
+    webhookId: "WEBHOOK-1",
+    verify: async (b) => {
+      calls.verify.push(b);
+      return "SUCCESS";
+    },
+    fetchResource: async (p) => {
+      calls.fetch.push(p);
+      return { status: "PENDING" };
+    },
+    log: () => {},
+    ...over,
+  };
+  return { d, calls };
+}
+
+describe("handlePaypalWebhook", () => {
+  it("answers 503 and stores nothing when no webhook id is configured", async () => {
+    const { d, calls } = deps({ webhookId: undefined });
+    expect((await handlePaypalWebhook(req(), d)).status).toBe(503);
+    expect(calls.verify).toEqual([]);
+    expect(await db().select().from(s.webhookEvents)).toHaveLength(0);
+  });
+
+  it("answers 400 when PayPal headers are missing", async () => {
+    const { d, calls } = deps();
+    expect((await handlePaypalWebhook(req({ "content-type": "application/json" }), d)).status).toBe(400);
+    expect(calls.verify).toEqual([]);
+  });
+
+  it("answers 400 and stores nothing when PayPal says the signature is not valid", async () => {
+    const { d } = deps({ verify: async () => "FAILURE" });
+    expect((await handlePaypalWebhook(req(), d)).status).toBe(400);
+    expect(await db().select().from(s.webhookEvents)).toHaveLength(0);
+  });
+
+  it("verifies the raw body, stores a new event, reconciles it and answers 200", async () => {
+    const { d, calls } = deps();
+    const res = await handlePaypalWebhook(req(), d);
+    expect(res.status).toBe(200);
+    expect(calls.verify[0]).toContain(`"webhook_event":${BODY}`);
+    expect(calls.verify[0]).toContain(`"webhook_id":"WEBHOOK-1"`);
+    expect(calls.fetch).toEqual(["/v2/payments/captures/C9"]);
+    const rows = await db().select().from(s.webhookEvents);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ paypalEventId: "WH-9", resourceId: "C9", verified: true, reconciledStatus: "PENDING" });
+    expect(rows[0]!.payloadSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("answers 200 to a duplicate delivery without reconciling again", async () => {
+    const { d, calls } = deps();
+    await handlePaypalWebhook(req(), d);
+    const second = await handlePaypalWebhook(req(), d);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ duplicate: true });
+    expect(calls.fetch).toHaveLength(1);
+    expect(await db().select().from(s.webhookEvents)).toHaveLength(1);
+  });
+
+  it("answers 500 when the verify call itself fails, so PayPal retries", async () => {
+    const { d } = deps({
+      verify: async () => {
+        throw new Error("PayPal 503");
+      },
+    });
+    expect((await handlePaypalWebhook(req(), d)).status).toBe(500);
+  });
+});
