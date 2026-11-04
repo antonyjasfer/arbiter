@@ -6,6 +6,7 @@ import { cacheKeyFor } from "../ai/structured-ai";
 import { verifyChain } from "../audit/audit";
 import { buildCompileRequest, type CompilerOutput } from "../agreements/compiler";
 import { getCurrentVersion } from "../agreements/versions";
+import { startCompile } from "../agreements/compile-jobs";
 import { createProject, listProjectsForUser } from "../projects/projects";
 import { DEMO_BRIEFS } from "./briefs";
 import { demoUserId, resetDemo, seedDemo, type DemoCache } from "./seed";
@@ -100,6 +101,16 @@ describe("resetDemo", () => {
     await seedDemo(db(), { model: MODEL, cache: fixture() });
     expect(await resetDemo(db(), { userId: realUser, model: MODEL, cache: fixture() })).toEqual({ ok: false, error: "not_demo" });
     expect(await resetDemo(db(), { userId: "not-a-uuid", model: MODEL, cache: fixture() })).toEqual({ ok: false, error: "not_demo" });
+  });
+
+  it("does not reset the shared demo AI cap", async () => {
+    await seedDemo(db(), { model: MODEL, cache: fixture() });
+    const client = (await demoUserId(db(), "client"))!;
+    const day = new Date().toISOString().slice(0, 10);
+    await db().insert(s.aiUsage).values({ day, scope: "demo", n: 20 });
+    expect((await resetDemo(db(), { userId: client, model: MODEL, cache: fixture() })).ok).toBe(true);
+    const bakery = (await db().select().from(s.projects).where(eq(s.projects.isDemo, true))).find((p) => p.title === "Bakery website")!;
+    expect(await startCompile(db(), { userId: client, projectId: bakery.id, model: "uncached-model" })).toEqual({ ok: false, error: "demo_cap" });
   });
 
   it("refuses a second reset within 30 seconds", async () => {

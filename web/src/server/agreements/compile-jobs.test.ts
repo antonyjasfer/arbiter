@@ -9,7 +9,7 @@ import { verifyChain } from "../audit/audit";
 import { createProject } from "../projects/projects";
 import { acceptInvite, createInvite } from "../projects/invitations";
 import { buildCompileRequest, type CompilerOutput } from "./compiler";
-import { claimJob, getJobStatus, resumeDueJobs, retryJobNow, runJob, startCompile } from "./compile-jobs";
+import { claimJob, getJobStatus, LEASE_MS, resumeDueJobs, retryJobNow, runJob, startCompile } from "./compile-jobs";
 
 const db = setupTestDb();
 const brief = "A small task-list web app with add, complete and filter, and a health check.";
@@ -91,9 +91,9 @@ describe("compile job lifecycle", () => {
   it("resumes a running job whose lease expired (the server restarted mid-call)", async () => {
     const jobId = await start();
     expect(await claimJob(db(), jobId, at(1))).toBeTruthy(); // claimed, then the process died
-    await resumeDueJobs(db(), fakeAi(good), at(60)); // lease (150 s) still held: nothing happens
+    await resumeDueJobs(db(), fakeAi(good), at(60)); // lease still held: nothing happens
     expect(await job(jobId)).toMatchObject({ status: "running", attempts: 1 });
-    await resumeDueJobs(db(), fakeAi(good), at(200));
+    await resumeDueJobs(db(), fakeAi(good), at(LEASE_MS / 1000 + 10));
     expect(await job(jobId)).toMatchObject({ status: "succeeded", attempts: 2 });
   });
 
@@ -103,7 +103,7 @@ describe("compile job lifecycle", () => {
     const slow: StructuredAi = {
       model: "fake-model",
       async generate<T>() {
-        await claimJob(db(), jobId, at(200));
+        await claimJob(db(), jobId, at(LEASE_MS / 1000 + 10));
         return { ok: true, data: good as unknown as T, model: "fake-model", cached: false, usage } as AiSuccess<T>;
       },
     };
@@ -152,6 +152,29 @@ describe("compile job lifecycle", () => {
   });
 });
 
+describe("review fixes", () => {
+  it("claims each resumed job with the time it is claimed, not the time the loop started", async () => {
+    const jobId = await start();
+    const times = [at(1), at(300)]; // the due query runs at 1 s; the claim happens 300 s later
+    const clock = () => times.shift() ?? at(300);
+    const ai: StructuredAi = { model: "fake-model", generate: async () => busy as never };
+    await resumeDueJobs(db(), ai, clock);
+    const j = await job(jobId);
+    expect(j.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(at(300).getTime() + 20_000);
+  });
+
+  it("holds a lease longer than one structured call can take (two 90 s model calls)", () => {
+    expect(LEASE_MS).toBeGreaterThanOrEqual(2 * 90_000 + 30_000);
+  });
+
+  it("counts a live call in ai_usage, which outlives the job rows", async () => {
+    const jobId = await start();
+    await runJob(db(), fakeAi(good), jobId, () => at(1));
+    const rows = await db().select().from(s.aiUsage);
+    expect(rows).toEqual([expect.objectContaining({ day: "2026-11-04", scope: `user:${client}`, n: 1 })]);
+  });
+});
+
 describe("retryJobNow", () => {
   it("makes a backed-off job due immediately, for the client only", async () => {
     const jobId = await start();
@@ -174,11 +197,7 @@ describe("startCompile guards", () => {
   });
 
   it("caps a real user at 10 live compiles per UTC day, except for cache hits", async () => {
-    const other = await createProject(db(), { userId: client, title: "Other", brief, budgetCents: 30000 });
-    if (!other.ok) throw new Error("setup");
-    await db().insert(s.compileJobs).values(
-      Array.from({ length: 10 }, () => ({ projectId: other.value.projectId, requestedBy: client, status: "succeeded" as const, input: {}, live: true, createdAt: at(-3600) })),
-    );
+    await db().insert(s.aiUsage).values({ day: "2026-11-04", scope: `user:${client}`, n: 10 });
     expect(await startCompile(db(), { userId: client, projectId, now: T0, model: "fake-model" })).toEqual({ ok: false, error: "daily_cap" });
     // A cache hit is still allowed.
     const req = buildCompileRequest({ brief, budgetCents: 30000, answers: [] });
@@ -187,16 +206,12 @@ describe("startCompile guards", () => {
   });
 
   it("resets the real-user cap at 00:00 UTC (05:30 IST)", async () => {
-    await db().insert(s.compileJobs).values(
-      Array.from({ length: 10 }, () => ({ projectId, requestedBy: client, status: "succeeded" as const, input: {}, live: true, createdAt: at(-3600) })),
-    );
+    await db().insert(s.aiUsage).values({ day: "2026-11-04", scope: `user:${client}`, n: 10 });
     expect(await startCompile(db(), { userId: client, projectId, now: new Date("2026-11-05T00:00:01Z"), model: "fake-model" })).toMatchObject({ ok: true });
   });
 
   it("caps all demo users together at 20 live compiles per UTC day", async () => {
-    await db().insert(s.compileJobs).values(
-      Array.from({ length: 20 }, () => ({ projectId: demoProjectId, requestedBy: demoClient, status: "succeeded" as const, input: {}, live: true, createdAt: at(-60) })),
-    );
+    await db().insert(s.aiUsage).values({ day: "2026-11-04", scope: "demo", n: 20 });
     expect(await startCompile(db(), { userId: demoClient, projectId: demoProjectId, now: T0, model: "fake-model" })).toEqual({ ok: false, error: "demo_cap" });
   });
 

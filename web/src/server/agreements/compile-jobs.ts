@@ -2,7 +2,7 @@
 // A job is claimed with one guarded UPDATE that takes a 150 s lease and bumps `attempts`; `attempts`
 // is the fencing token, so a runner whose lease was taken over cannot write its result.
 // Nothing here uses in-process timers: due jobs are resumed on boot and on every status poll.
-import { and, count, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { parseId } from "@/lib/ids";
 import type { Result } from "@/lib/result";
 import { cacheKeyFor, withCache, type StructuredAi } from "../ai/structured-ai";
@@ -10,12 +10,13 @@ import { dbCacheStore } from "../ai/db-cache";
 import { appendAudit } from "../audit/audit";
 import { requireProjectRole } from "../auth/roles";
 import type { Db } from "../db/types";
-import { agreements, compileJobs, projects, users } from "../db/schema";
+import { agreements, aiUsage, compileJobs, projects, users } from "../db/schema";
 import { moneyToCents } from "../projects/money";
 import { buildCompileRequest, checkCompilerOutput, draftBody, type CompileInput } from "./compiler";
 import { applyCompileResult } from "./versions";
 
-export const LEASE_MS = 150_000;
+// Longer than one structured call can take: two model calls (first try + one re-ask) of up to 90 s each.
+export const LEASE_MS = 240_000;
 export const BUSY_BACKOFF_MS = [20_000, 60_000, 120_000] as const;
 export const MAX_ATTEMPTS = BUSY_BACKOFF_MS.length + 1;
 export const REAL_DAILY_CAP = 10; // user decision, 3 Nov 2026
@@ -24,8 +25,13 @@ export const DEMO_DAILY_CAP = 20;
 type Job = typeof compileJobs.$inferSelect;
 export type StartError = "not_member" | "forbidden" | "job_running" | "locked" | "demo_cap" | "daily_cap";
 
-function startOfUtcDay(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+/** The UTC day a live call counts against (caps reset at 00:00 UTC = 05:30 IST). */
+function utcDay(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+function usageScope(userId: string, isDemo: boolean): string {
+  return isDemo ? "demo" : `user:${userId}`;
 }
 
 export async function startCompile(
@@ -41,11 +47,10 @@ export async function startCompile(
   // Caps count live (uncached) model calls only; a request the cache can answer is always allowed.
   const cached = await dbCacheStore(db, args.model).get(cacheKeyFor(args.model, buildCompileRequest(input)));
   if (cached === undefined) {
-    const since = startOfUtcDay(now);
-    const liveToday = and(eq(compileJobs.live, true), gte(compileJobs.createdAt, since));
-    const [row] = p!.isDemo
-      ? await db.select({ n: count() }).from(compileJobs).innerJoin(users, eq(users.id, compileJobs.requestedBy)).where(and(liveToday, eq(users.isDemo, true)))
-      : await db.select({ n: count() }).from(compileJobs).where(and(liveToday, eq(compileJobs.requestedBy, args.userId)));
+    const [row] = await db
+      .select({ n: aiUsage.n })
+      .from(aiUsage)
+      .where(and(eq(aiUsage.day, utcDay(now)), eq(aiUsage.scope, usageScope(args.userId, p!.isDemo))));
     const n = row?.n ?? 0;
     if (p!.isDemo && n >= DEMO_DAILY_CAP) return { ok: false, error: "demo_cap" };
     if (!p!.isDemo && n >= REAL_DAILY_CAP) return { ok: false, error: "daily_cap" };
@@ -106,9 +111,17 @@ export async function runJob(db: Db, ai: StructuredAi, jobId: string, clock: () 
   const input = job.input as CompileInput;
   const req = buildCompileRequest(input);
   const store = dbCacheStore(db, ai.model);
-  // Mark the job live before an uncached call, so the daily caps count it even if the call fails.
+  // Count an uncached call before making it, so the daily caps include it even if it fails. The count
+  // lives in ai_usage, which a demo Reset does not delete.
   if ((await store.get(cacheKeyFor(ai.model, req))) === undefined) {
-    await db.update(compileJobs).set({ live: true }).where(mine(job));
+    const [u] = await db.select({ isDemo: users.isDemo }).from(users).where(eq(users.id, job.requestedBy));
+    await db.transaction(async (tx) => {
+      await tx.update(compileJobs).set({ live: true }).where(mine(job));
+      await tx
+        .insert(aiUsage)
+        .values({ day: utcDay(clock()), scope: usageScope(job.requestedBy, Boolean(u?.isDemo)), n: 1 })
+        .onConflictDoUpdate({ target: [aiUsage.day, aiUsage.scope], set: { n: sql`${aiUsage.n} + 1` } });
+    });
   }
   const res = await withCache(ai, store).generate(req);
   const now = clock();
@@ -148,14 +161,19 @@ export async function runJob(db: Db, ai: StructuredAi, jobId: string, clock: () 
   }
 }
 
-/** Runs every job that is due (queued and past its backoff, or running with an expired lease). */
-export async function resumeDueJobs(db: Db, ai: StructuredAi, now: Date = new Date()): Promise<number> {
+/**
+ * Runs every job that is due (queued and past its backoff, or running with an expired lease). Each job is
+ * claimed with the time of its own claim, so a job reached after slow earlier ones still gets a full lease.
+ */
+export async function resumeDueJobs(db: Db, ai: StructuredAi, time: Date | (() => Date) = () => new Date()): Promise<number> {
+  const clock = typeof time === "function" ? time : () => time;
+  const now = clock();
   const due = await db
     .select({ id: compileJobs.id })
     .from(compileJobs)
     .where(or(and(eq(compileJobs.status, "queued"), lte(compileJobs.nextAttemptAt, now)), and(eq(compileJobs.status, "running"), lt(compileJobs.leaseUntil, now))))
     .limit(5);
-  for (const { id } of due) await runJob(db, ai, id, () => now);
+  for (const { id } of due) await runJob(db, ai, id, clock);
   return due.length;
 }
 

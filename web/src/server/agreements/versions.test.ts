@@ -96,6 +96,26 @@ describe("createManualVersion", () => {
   });
 });
 
+describe("one agreement per project", () => {
+  it("rejects a second agreement row for the same project", async () => {
+    await expect(db().insert(s.agreements).values({ projectId })).rejects.toThrow();
+  });
+
+  it("gives two simultaneous first versions one agreement and versions 1 and 2", async () => {
+    const p = await createProject(db(), { userId: client, title: "Race", brief, budgetCents: 30000 });
+    if (!p.ok) throw new Error("setup");
+    const pid = p.value.projectId;
+    await Promise.all([
+      createManualVersion(db(), { userId: client, projectId: pid, body: sampleBody() }),
+      db().transaction((tx) => applyCompileResult(tx, { projectId: pid, userId: client, body: sampleBody(), jobId: null })),
+    ]);
+    const rows = await db().select().from(s.agreements).where(eq(s.agreements.projectId, pid));
+    expect(rows).toHaveLength(1);
+    const versions = await db().select().from(s.agreementVersions).where(eq(s.agreementVersions.agreementId, rows[0]!.id));
+    expect(versions.map((v) => v.version).sort()).toEqual([1, 2]);
+  });
+});
+
 describe("saveEdit", () => {
   it("edits in place while nobody has approved", async () => {
     const v1 = await current();

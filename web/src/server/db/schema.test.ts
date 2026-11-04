@@ -15,11 +15,11 @@ async function seedProject() {
 }
 
 describe("schema", () => {
-  it("creates all 18 tables, including compile_jobs and ai_cache", async () => {
+  it("creates all 19 tables, including compile_jobs, ai_cache and ai_usage", async () => {
     const r = await db().execute(sql`select table_name from information_schema.tables where table_schema = 'public'`);
     const names = r.rows.map((x) => (x as { table_name: string }).table_name);
-    expect(names).toHaveLength(18);
-    expect(names).toEqual(expect.arrayContaining(["compile_jobs", "ai_cache"]));
+    expect(names).toHaveLength(19);
+    expect(names).toEqual(expect.arrayContaining(["compile_jobs", "ai_cache", "ai_usage"]));
   });
 
   it("allows only one freelancer per project", async () => {

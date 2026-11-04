@@ -11,6 +11,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -105,7 +106,8 @@ export const agreements = pgTable(
     status: agreementStatus("status").notNull().default("draft"),
     createdAt: createdAt(),
   },
-  (t) => [index("agreements_project_idx").on(t.projectId)],
+  // One agreement per project; concurrent first versions then share it (review fix, Phase 3).
+  (t) => [uniqueIndex("agreements_project_uq").on(t.projectId)],
 );
 
 export const agreementVersions = pgTable(
@@ -306,6 +308,18 @@ export const compileJobs = pgTable(
     index("compile_jobs_requested_by_idx").on(t.requestedBy),
     index("compile_jobs_due_idx").on(t.status, t.nextAttemptAt),
   ],
+);
+
+// Live (uncached) AI calls per UTC day, per scope ("user:<id>" or "demo"). Kept apart from compile_jobs
+// so a demo Reset, which deletes demo jobs, cannot reset the daily caps (review fix, Phase 3).
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    day: text("day").notNull(),
+    scope: text("scope").notNull(),
+    n: integer("n").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.day, t.scope] })],
 );
 
 export const aiCache = pgTable("ai_cache", {

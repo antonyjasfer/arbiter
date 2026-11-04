@@ -60,8 +60,10 @@ async function insertVersion(
   tx: Db,
   args: { projectId: string; userId: string; body: AgreementBody; jobId: string | null; source: "ai" | "manual" },
 ): Promise<{ version: number; hash: string }> {
-  let a = await lockAgreement(tx, args.projectId);
-  if (!a) [a] = await tx.insert(agreements).values({ projectId: args.projectId, currentVersion: 0 }).returning();
+  // The unique index on project_id makes concurrent first versions share one agreement: whoever loses the
+  // insert waits on the winner's row lock below, then appends the next version.
+  await tx.insert(agreements).values({ projectId: args.projectId, currentVersion: 0 }).onConflictDoNothing({ target: agreements.projectId });
+  const a = await lockAgreement(tx, args.projectId);
   if (a!.status === "locked") throw new AgreementLocked();
   const [{ last } = { last: null }] = await tx.select({ last: max(agreementVersions.version) }).from(agreementVersions).where(eq(agreementVersions.agreementId, a!.id));
   const version = (last ?? 0) + 1;
