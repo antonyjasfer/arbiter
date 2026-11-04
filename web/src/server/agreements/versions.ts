@@ -48,21 +48,56 @@ async function currentRow(tx: Db, agreementId: string) {
   return v;
 }
 
-/** Called by the compile job inside its transaction. Throws if the agreement is already locked. */
+class AgreementLocked extends Error {
+  constructor() {
+    super("agreement is locked");
+    this.name = "AgreementLocked";
+  }
+}
+
+/** Appends a new version (no approvals). Runs inside the caller's transaction; throws AgreementLocked. */
+async function insertVersion(
+  tx: Db,
+  args: { projectId: string; userId: string; body: AgreementBody; jobId: string | null; source: "ai" | "manual" },
+): Promise<{ version: number; hash: string }> {
+  let a = await lockAgreement(tx, args.projectId);
+  if (!a) [a] = await tx.insert(agreements).values({ projectId: args.projectId, currentVersion: 0 }).returning();
+  if (a!.status === "locked") throw new AgreementLocked();
+  const [{ last } = { last: null }] = await tx.select({ last: max(agreementVersions.version) }).from(agreementVersions).where(eq(agreementVersions.agreementId, a!.id));
+  const version = (last ?? 0) + 1;
+  const hash = versionHash(args.projectId, version, args.body);
+  await tx.insert(agreementVersions).values({ agreementId: a!.id, version, bodyJson: args.body, hash, source: args.source, createdBy: args.userId, compileJobId: args.jobId });
+  await tx.update(agreements).set({ currentVersion: version }).where(eq(agreements.id, a!.id));
+  await appendAudit(tx, { projectId: args.projectId, actorId: args.userId, action: "version_created", data: { version, hash, source: args.source } });
+  return { version, hash };
+}
+
+/** Called by the compile job inside its transaction, with a body that already passed the checks. */
 export async function applyCompileResult(
   tx: Db,
   args: { projectId: string; userId: string; body: AgreementBody; jobId: string | null },
 ): Promise<{ version: number; hash: string }> {
-  let a = await lockAgreement(tx, args.projectId);
-  if (!a) [a] = await tx.insert(agreements).values({ projectId: args.projectId, currentVersion: 0 }).returning();
-  if (a!.status === "locked") throw new Error("applyCompileResult: agreement is locked");
-  const [{ last } = { last: null }] = await tx.select({ last: max(agreementVersions.version) }).from(agreementVersions).where(eq(agreementVersions.agreementId, a!.id));
-  const version = (last ?? 0) + 1;
-  const hash = versionHash(args.projectId, version, args.body);
-  await tx.insert(agreementVersions).values({ agreementId: a!.id, version, bodyJson: args.body, hash, source: "ai", createdBy: args.userId, compileJobId: args.jobId });
-  await tx.update(agreements).set({ currentVersion: version }).where(eq(agreements.id, a!.id));
-  await appendAudit(tx, { projectId: args.projectId, actorId: args.userId, action: "version_created", data: { version, hash, source: "ai" } });
-  return { version, hash };
+  return insertVersion(tx, { ...args, source: "ai" });
+}
+
+/** The client writes the next version by hand: after a failed compile, past a daily cap, or from scratch. */
+export async function createManualVersion(
+  db: Db,
+  args: { userId: string; projectId: string; body: AgreementBody },
+): Promise<Result<{ version: number; hash: string }, VersionError>> {
+  const role = await requireProjectRole(db, { userId: args.userId, projectId: args.projectId, allowed: ["client"] });
+  if (!role.ok) return { ok: false, error: { code: role.error } };
+  const [p] = await db.select({ budget: projects.budget }).from(projects).where(eq(projects.id, args.projectId));
+  const checked = checkBody(args.body, moneyToCents(p!.budget));
+  if (!checked.ok) return { ok: false, error: { code: "invalid_body", problems: checked.error } };
+  const body = checked.value;
+  try {
+    const v = await db.transaction((tx) => insertVersion(tx, { projectId: args.projectId, userId: args.userId, body, jobId: null, source: "manual" }));
+    return { ok: true, value: v };
+  } catch (e) {
+    if (e instanceof AgreementLocked) return { ok: false, error: { code: "locked" } };
+    throw e;
+  }
 }
 
 export async function getCurrentVersion(db: Db, args: { userId: string; projectId: string }): Promise<Result<CurrentVersion | null, VersionError>> {

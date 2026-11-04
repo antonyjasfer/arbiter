@@ -137,6 +137,8 @@ describe("compile job lifecycle", () => {
     expect(j).toMatchObject({ status: "failed", errorCode: "checks_failed" });
     expect(JSON.parse(j.errorDetail!)).toEqual([{ code: "sum_mismatch" }]);
     expect(await db().select().from(s.agreementVersions)).toEqual([]);
+    // The AI's draft is kept so the client can fix it by hand.
+    expect(j.result).toMatchObject({ draft: { milestones: [{ key: "m1", amountCents: 20000 }, { key: "m2", amountCents: 15000 }] } });
   });
 
   it("serves a cached result without counting it as live", async () => {

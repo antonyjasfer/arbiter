@@ -12,7 +12,7 @@ import { requireProjectRole } from "../auth/roles";
 import type { Db } from "../db/types";
 import { agreements, compileJobs, projects, users } from "../db/schema";
 import { moneyToCents } from "../projects/money";
-import { buildCompileRequest, checkCompilerOutput, type CompileInput } from "./compiler";
+import { buildCompileRequest, checkCompilerOutput, draftBody, type CompileInput } from "./compiler";
 import { applyCompileResult } from "./versions";
 
 export const LEASE_MS = 150_000;
@@ -89,11 +89,11 @@ function mine(job: Job) {
   return and(eq(compileJobs.id, job.id), eq(compileJobs.status, "running"), eq(compileJobs.attempts, job.attempts));
 }
 
-async function fail(db: Db, job: Job, code: "ai_busy" | "invalid_output" | "checks_failed" | "error", detail: string, now: Date) {
+async function fail(db: Db, job: Job, code: "ai_busy" | "invalid_output" | "checks_failed" | "error", detail: string, now: Date, result?: unknown) {
   await db.transaction(async (tx) => {
     const [done] = await tx
       .update(compileJobs)
-      .set({ status: "failed", errorCode: code, errorDetail: detail.slice(0, 2000), leaseUntil: null, finishedAt: now })
+      .set({ status: "failed", errorCode: code, errorDetail: detail.slice(0, 2000), leaseUntil: null, finishedAt: now, result: result ?? null })
       .where(mine(job))
       .returning({ id: compileJobs.id });
     if (done) await appendAudit(tx, { projectId: job.projectId, actorId: null, action: "compile_failed", data: { jobId: job.id, code } });
@@ -129,7 +129,7 @@ export async function runJob(db: Db, ai: StructuredAi, jobId: string, clock: () 
 
   const checked = checkCompilerOutput(res.data, input.budgetCents);
   if (!checked.ok) {
-    await fail(db, job, "checks_failed", JSON.stringify(checked.error), now);
+    await fail(db, job, "checks_failed", JSON.stringify(checked.error), now, { draft: draftBody(res.data) });
     return;
   }
   try {

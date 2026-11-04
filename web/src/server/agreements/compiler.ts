@@ -66,7 +66,8 @@ export function buildCompileRequest(input: CompileInput): AiRequest<CompilerOutp
   return { system: SYSTEM, prompt: parts.join("\n"), schema: compilerOutputSchema, schemaName: SCHEMA_NAME };
 }
 
-function toBody(out: CompilerOutput): AgreementBody {
+/** The model's output as an (unchecked) body; kept on a failed job so the client can fix it by hand. */
+export function draftBody(out: CompilerOutput): AgreementBody {
   return {
     milestones: out.milestones.map((m, i) => ({
       key: `m${i + 1}`,
@@ -102,5 +103,5 @@ export function checkBody(body: AgreementBody, budgetCents: number): Result<Agre
 }
 
 export function checkCompilerOutput(out: CompilerOutput, budgetCents: number): Result<AgreementBody, CheckProblem[]> {
-  return checkBody(toBody(out), budgetCents);
+  return checkBody(draftBody(out), budgetCents);
 }

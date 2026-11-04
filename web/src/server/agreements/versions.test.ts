@@ -8,7 +8,7 @@ import { createProject } from "../projects/projects";
 import { acceptInvite, createInvite } from "../projects/invitations";
 import type { AgreementBody } from "./body";
 import { checkCompilerOutput } from "./compiler";
-import { applyCompileResult, approve, getCurrentVersion, saveEdit } from "./versions";
+import { applyCompileResult, approve, createManualVersion, getCurrentVersion, saveEdit } from "./versions";
 
 const db = setupTestDb();
 const brief = "A small task-list web app with add, complete and filter, and a health check.";
@@ -69,6 +69,30 @@ describe("applyCompileResult and getCurrentVersion", () => {
   it("hides the agreement from non-members", async () => {
     expect(await getCurrentVersion(db(), { userId: outsider, projectId })).toEqual({ ok: false, error: { code: "not_member" } });
     expect(await getCurrentVersion(db(), { userId: client, projectId: "nope" })).toEqual({ ok: false, error: { code: "not_member" } });
+  });
+});
+
+describe("createManualVersion", () => {
+  it("lets the client write the next version by hand, checked like any other", async () => {
+    const body = structuredClone((await current()).body);
+    body.milestones[0]!.title = "Written by hand";
+    expect(await createManualVersion(db(), { userId: client, projectId, body })).toMatchObject({ ok: true, value: { version: 2 } });
+    expect(await current()).toMatchObject({ version: 2, source: "manual", clientApprovedAt: null });
+    const bad = structuredClone(body);
+    bad.milestones[1]!.amountCents = 1;
+    expect(await createManualVersion(db(), { userId: client, projectId, body: bad })).toMatchObject({ ok: false, error: { code: "invalid_body" } });
+    expect(await createManualVersion(db(), { userId: freelancer, projectId, body })).toEqual({ ok: false, error: { code: "forbidden" } });
+  });
+
+  it("works on a project with no version yet, and refuses once locked", async () => {
+    const p = await createProject(db(), { userId: client, title: "Blank", brief, budgetCents: 30000 });
+    if (!p.ok) throw new Error("setup");
+    const body = sampleBody();
+    expect(await createManualVersion(db(), { userId: client, projectId: p.value.projectId, body })).toMatchObject({ ok: true, value: { version: 1 } });
+    const v = await current();
+    await approve(db(), { userId: client, projectId, expectedHash: v.hash });
+    await approve(db(), { userId: freelancer, projectId, expectedHash: v.hash });
+    expect(await createManualVersion(db(), { userId: client, projectId, body })).toEqual({ ok: false, error: { code: "locked" } });
   });
 });
 
