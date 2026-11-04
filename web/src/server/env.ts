@@ -1,7 +1,9 @@
 // Server-only environment, validated once. Errors name variables, never values.
 import { z } from "zod";
 
-const blankToUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+
+const blankToUndefined =(v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
 const required = z.preprocess(blankToUndefined, z.string());
 
 const schema = z.object({
@@ -17,7 +19,7 @@ const schema = z.object({
   PAYPAL_WEBHOOK_ID: z.preprocess(blankToUndefined, z.string().optional()),
   GEMINI_API_KEY: required,
   // FINDINGS: gemini-3.8-flash was overloaded on the free tier; 3.6 works.
-  GEMINI_MODEL: z.preprocess(blankToUndefined, z.string().default("gemini-3.6-flash")),
+  GEMINI_MODEL: z.preprocess(blankToUndefined, z.string().default(DEFAULT_GEMINI_MODEL)),
   // Demo sign-in exists only when this is exactly "true".
   DEMO_MODE: z.preprocess((v) => v === "true", z.boolean()),
 });
