@@ -1,1 +1,149 @@
-{}
+{
+  "b67a124be738c57f45c7091921b6c9530a9b0cf5a975957d4dbd69cf7dbbf9c5": {
+    "model": "gemini-3.6-flash",
+    "data": {
+      "milestones": [
+        {
+          "title": "Core App, API, Automated Tests, and Deployment",
+          "amount_cents": 20000,
+          "due_in_days": 14,
+          "criteria": [
+            {
+              "kind": "browser",
+              "text": "GET /health on the deployed HTTPS site returns HTTP 200 with JSON status ok."
+            },
+            {
+              "kind": "browser",
+              "text": "GET /api/tasks returns a JSON list of tasks and POST /api/tasks creates a new task."
+            },
+            {
+              "kind": "browser",
+              "text": "Entering text in input 'New task' and clicking 'Add' adds the task to the list."
+            },
+            {
+              "kind": "browser",
+              "text": "Ticking the checkbox labelled with the task title marks the task as completed."
+            },
+            {
+              "kind": "test",
+              "text": "Automated tests run and pass when executing npm test."
+            },
+            {
+              "kind": "static",
+              "text": "Repository contains package.json with test script configured for npm test."
+            }
+          ]
+        },
+        {
+          "title": "Filters, Validation Error, and Documentation",
+          "amount_cents": 10000,
+          "due_in_days": 21,
+          "criteria": [
+            {
+              "kind": "browser",
+              "text": "Submitting an empty title shows the error message 'Title is required'."
+            },
+            {
+              "kind": "browser",
+              "text": "Clicking filter buttons 'All', 'Active', and 'Completed' filters the displayed tasks correctly."
+            },
+            {
+              "kind": "static",
+              "text": "README.md file exists in the repository with instructions on how to run the application."
+            }
+          ]
+        }
+      ],
+      "questions": [
+        {
+          "question": "Do tasks need to persist across application restarts or server redeployments?",
+          "why": "In-memory storage resets on restart; if persistence to disk or file is required, it adds scope to the data layer."
+        }
+      ]
+    },
+    "usage": {
+      "inputTokens": 610,
+      "outputTokens": 332
+    },
+    "createdAt": "2026-11-04T07:07:56.722Z"
+  },
+  "7277d501f6607720a673ec2f92471b2d11d2fe7f28b6675a4917a28c6c05ab1d": {
+    "model": "gemini-3.6-flash",
+    "data": {
+      "milestones": [
+        {
+          "title": "Menu Page & Project Setup",
+          "amount_cents": 15000,
+          "due_in_days": 10,
+          "criteria": [
+            {
+              "kind": "static",
+              "text": "README.md contains instructions for running the local server and running tests."
+            },
+            {
+              "kind": "test",
+              "text": "npm test passes for menu listing and pricing display component tests."
+            },
+            {
+              "kind": "browser",
+              "text": "Visiting the homepage displays header element 'Fresh Bakery Menu' and displays baked goods with item names and prices."
+            }
+          ]
+        },
+        {
+          "title": "Online Ordering & Cart System",
+          "amount_cents": 15000,
+          "due_in_days": 20,
+          "criteria": [
+            {
+              "kind": "test",
+              "text": "npm test passes for cart calculations and order submission validation."
+            },
+            {
+              "kind": "browser",
+              "text": "Clicking 'Add to Cart' next to a menu item updates the header badge to display 'Cart (1)'."
+            },
+            {
+              "kind": "browser",
+              "text": "Submitting the order checkout form displays confirmation message 'Order Confirmed'."
+            }
+          ]
+        },
+        {
+          "title": "Admin Menu Management & Responsive Polish",
+          "amount_cents": 10000,
+          "due_in_days": 30,
+          "criteria": [
+            {
+              "kind": "browser",
+              "text": "Navigating to '/admin' allows updating a menu item title and saving changes."
+            },
+            {
+              "kind": "browser",
+              "text": "Viewing the site on a mobile device display shows a collapsable navigation bar toggle labeled 'Menu'."
+            },
+            {
+              "kind": "review",
+              "text": "The website visual layout looks modern, clean, and styled appropriately for a bakery brand."
+            }
+          ]
+        }
+      ],
+      "questions": [
+        {
+          "question": "Do you require online payment processing (e.g., Stripe/Credit Card) or is pay-upon-pickup sufficient?",
+          "why": "Integrating a payment gateway adds authentication and payment SDK setup scope."
+        },
+        {
+          "question": "Do you have existing photos and menu item details ready to upload, or will placeholder content be used initially?",
+          "why": "Preparing custom photography and assets can impact content integration timeline."
+        }
+      ]
+    },
+    "usage": {
+      "inputTokens": 417,
+      "outputTokens": 619
+    },
+    "createdAt": "2026-11-04T07:09:51.085Z"
+  }
+}
