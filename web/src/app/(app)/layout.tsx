@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { auth } from "@/auth";
 import { UserMenu } from "@/components/user-menu";
@@ -6,6 +7,8 @@ import { UserMenu } from "@/components/user-menu";
 // Phase 3: roles come from project membership (shown on each project), so the Phase 2 view switcher
 // is no longer in the header; it granted nothing and would now only confuse.
 async function HeaderControls() {
+  // Request-time only: auth() uses crypto, which Cache Components refuses during prerender.
+  await connection();
   const session = await auth();
   return <div className="flex items-center gap-4">{session?.user ? <UserMenu name={session.user.name ?? "Signed in"} image={session.user.image} /> : null}</div>;
 }
