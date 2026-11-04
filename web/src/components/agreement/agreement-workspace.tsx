@@ -341,7 +341,13 @@ function Editor({ ws, initial, onCancel, mode }: { ws: Workspace; initial: Agree
   const budget = ws.project.budgetCents;
   const allocated = useMemo(() => draft.reduce((s, m) => s + (dollarsToCents(m.amount) ?? 0), 0), [draft]);
   const left = budget - allocated;
-  const willClear = mode === "edit" && Boolean(ws.version?.clientApprovedAt || ws.version?.freelancerApprovedAt);
+  const v = ws.version;
+  const willClear = mode === "edit" && Boolean(v?.clientApprovedAt || v?.freelancerApprovedAt);
+  // Mirrors saveEdit: only an unapproved hand-written version is edited in place.
+  const inPlace = mode === "edit" && v?.source === "manual" && !willClear;
+  const nextVersion = inPlace ? v!.version : (v?.version ?? 0) + 1;
+  // The criterion just added gets the cursor, so adding one is: click, type, pick the kind.
+  const [focusKey, setFocusKey] = useState<string | null>(null);
 
   const update = (i: number, patch: Partial<DraftMilestone>) => setDraft(draft.map((m, j) => (j === i ? { ...m, ...patch } : m)));
   const updateCriterion = (i: number, k: number, patch: Partial<DraftMilestone["criteria"][number]>) =>
@@ -381,7 +387,9 @@ function Editor({ ws, initial, onCancel, mode }: { ws: Workspace; initial: Agree
         </p>
       </div>
       {willClear ? (
-        <p className="rounded-lg border border-status-review/40 bg-status-review/10 p-3 text-sm">Saving creates version {ws.version!.version + 1} and clears the approvals on version {ws.version!.version}.</p>
+        <p className="rounded-lg border border-status-review/40 bg-status-review/10 p-3 text-sm">Saving creates version {nextVersion} and clears the approvals on version {v!.version}.</p>
+      ) : mode === "edit" && v?.source === "ai" ? (
+        <p className="rounded-lg border bg-muted/40 p-3 text-sm">Saving creates version {nextVersion}. Version {v.version}, the AI&apos;s draft, stays in the history unchanged.</p>
       ) : null}
 
       {draft.map((m, i) => (
@@ -412,14 +420,19 @@ function Editor({ ws, initial, onCancel, mode }: { ws: Workspace; initial: Agree
                     </option>
                   ))}
                 </Select>
-                <Input aria-label={`Criterion ${k + 1}`} value={c.text} maxLength={500} required placeholder="One observable, checkable statement" onChange={(e) => updateCriterion(i, k, { text: e.target.value })} />
+                <Input aria-label={`Criterion ${k + 1}`} autoFocus={focusKey === `${i}-${k}`} value={c.text} maxLength={500} required placeholder="One observable, checkable statement" onChange={(e) => updateCriterion(i, k, { text: e.target.value })} />
                 <Button type="button" variant="ghost" size="icon" aria-label={`Remove criterion ${k + 1}`} disabled={m.criteria.length === 1} onClick={() => update(i, { criteria: m.criteria.filter((_, j) => j !== k) })}>
                   <Trash2 aria-hidden />
                 </Button>
               </div>
             ))}
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" disabled={m.criteria.length >= 8} onClick={() => update(i, { criteria: [...m.criteria, { kind: "test", text: "" }] })}>
+              <Button type="button" variant="outline" size="sm" disabled={m.criteria.length >= 8}
+                onClick={() => {
+                  setFocusKey(`${i}-${m.criteria.length}`);
+                  update(i, { criteria: [...m.criteria, { kind: "test", text: "" }] });
+                }}
+              >
                 <Plus aria-hidden /> Add criterion
               </Button>
               {draft.length > 1 ? (
@@ -442,7 +455,7 @@ function Editor({ ws, initial, onCancel, mode }: { ws: Workspace; initial: Agree
       {result && !result.ok && result.error === "stale" ? <FieldError>Reload the page to see the latest version before editing.</FieldError> : null}
       <div className="flex flex-wrap gap-2 border-t pt-4">
         <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : mode === "edit" ? "Save changes" : "Save as a new version"}
+          {pending ? "Saving…" : inPlace ? "Save changes" : `Save as version ${nextVersion}`}
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
           <RotateCcw aria-hidden /> Cancel

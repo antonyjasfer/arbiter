@@ -117,17 +117,31 @@ describe("one agreement per project", () => {
 });
 
 describe("saveEdit", () => {
-  it("edits in place while nobody has approved", async () => {
+  it("keeps the AI's draft untouched: editing an AI version creates a new version", async () => {
     const v1 = await current();
     const body = structuredClone(v1.body);
-    body.milestones[0]!.title = "Working app, deployed on Render";
-    const r = await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body });
-    expect(r.ok).toBe(true);
+    body.milestones[0]!.criteria.push({ key: "m1c3", kind: "review", text: "The layout is easy to use.", needsHumanJudgment: true });
+    expect(await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body })).toMatchObject({ ok: true, value: { version: 2 } });
+    const v2 = await current();
+    expect(v2).toMatchObject({ version: 2, source: "manual" });
+    expect(v2.body.milestones[0]!.criteria.at(-1)).toMatchObject({ kind: "review", needsHumanJudgment: true });
+    const [orig] = await db().select().from(s.agreementVersions).where(eq(s.agreementVersions.hash, v1.hash));
+    expect(orig).toMatchObject({ version: 1, source: "ai" });
+  });
+
+  it("edits an unapproved hand-written version in place", async () => {
+    const v1 = await current();
+    const first = structuredClone(v1.body);
+    first.milestones[0]!.title = "Working app, deployed on Render";
+    await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body: first }); // AI v1 -> manual v2
+    const v2 = await current();
+    const second = structuredClone(v2.body);
+    second.milestones[0]!.title = "Working app, deployed on Render (HTTPS)";
+    expect(await saveEdit(db(), { userId: client, projectId, expectedHash: v2.hash, body: second })).toMatchObject({ ok: true, value: { version: 2 } });
     const v = await current();
-    expect(v.version).toBe(1);
-    expect(v.source).toBe("manual");
-    expect(v.hash).not.toBe(v1.hash);
-    expect(v.body.milestones[0]!.title).toBe("Working app, deployed on Render");
+    expect(v.version).toBe(2);
+    expect(v.hash).not.toBe(v2.hash);
+    expect(v.body.milestones[0]!.title).toBe("Working app, deployed on Render (HTTPS)");
   });
 
   it("creates a new version and clears approvals when someone had already approved", async () => {

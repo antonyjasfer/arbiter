@@ -144,7 +144,10 @@ export async function saveEdit(
     const v = await currentRow(tx, a.id);
     if (!v) return { ok: false, error: { code: "no_version" } } as const;
     if (v.hash !== args.expectedHash) return { ok: false, error: { code: "stale" } } as const;
-    if (!v.clientApprovedAt && !v.freelancerApprovedAt) {
+    const approved = Boolean(v.clientApprovedAt || v.freelancerApprovedAt);
+    // In place only for an unapproved hand-written version. The AI's draft is never rewritten, so its
+    // provenance stays visible: editing it, or anything already approved, makes a new version.
+    if (!approved && v.source === "manual") {
       const hash = versionHash(args.projectId, v.version, body);
       const [done] = await tx
         .update(agreementVersions)
@@ -155,12 +158,12 @@ export async function saveEdit(
       await appendAudit(tx, { projectId: args.projectId, actorId: args.userId, action: "version_edited", data: { version: v.version, hash } });
       return { ok: true, value: { version: v.version, hash } } as const;
     }
-    // Someone approved the current text: a change makes a new version, and nobody has approved it yet.
+    // A new version that nobody has approved yet.
     const version = v.version + 1;
     const hash = versionHash(args.projectId, version, body);
     await tx.insert(agreementVersions).values({ agreementId: a.id, version, bodyJson: body, hash, source: "manual", createdBy: args.userId });
     await tx.update(agreements).set({ currentVersion: version }).where(eq(agreements.id, a.id));
-    await appendAudit(tx, { projectId: args.projectId, actorId: args.userId, action: "version_created", data: { version, hash, source: "manual", clearedApprovals: true } });
+    await appendAudit(tx, { projectId: args.projectId, actorId: args.userId, action: "version_created", data: { version, hash, source: "manual", clearedApprovals: approved } });
     return { ok: true, value: { version, hash } } as const;
   });
 }
