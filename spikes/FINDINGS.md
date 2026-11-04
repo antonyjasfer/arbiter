@@ -79,6 +79,16 @@
 - Reauthorize on a fresh authorization returns 422 (as in Phase 1); it is only allowed later in the honor period.
 - Tests at the end of Phase 2: `web` 65 tests in 15 files; `spikes` 50 tests in 6 files; lint, typecheck and build clean; GitHub CI green.
 
+## Phase 3 live checks (2026-11-04, https://arbiter-q41f.onrender.com, commit 26644e4)
+- **Auto-deploy after CI works.** After the user reconnected the Render GitHub App, pushing 26644e4 (touches `web/`) ran CI (run 41815690586, passed 10:41:29 UTC) and Render started deploy dep-dblgnn2vcj2c738ngel0 by itself 3.5 s later (trigger `new_commit`, not manual); live 10:43:06 UTC. Before the reconnect, a push produced no Render event at all, so 4b77e98 was deployed by hand.
+- **Demo mode:** landing shows "Try the demo"; `/api/auth/providers` lists `github, demo`. `DEMO_MODE` is read at build time for the static landing page, so changing it needs a redeploy.
+- **Demo flow on the live site:** demo client signed in, opened TaskBoard, added the "easy to use" criterion as Needs human review and saved it as version 2 (version 1, the AI draft, kept unchanged), approved; demo freelancer approved; agreement locked, milestones AGREED; audit page "Chain verified ✓ · 8 events". Bakery "Draft with AI" came back from the cache in under 8 s with 3 milestones and 2 questions; `ai_usage` stayed empty (no live call). Reset demo restored both projects.
+- **Speed (not precisely measured):** on Render (same region as Neon) each demo sign-in, save and approval had finished within the 4–5 s waits of the browser check; in local dev from India the same actions took 10–15 s (server log: approve 13.3 s, demo sign-in 9.6 s).
+- **IDs:** `/api/compile-jobs/<forged or malformed id>` answers 404. Project and audit pages with a forged or malformed id render "404: This page could not be found." but with HTTP status 200, because the page shell streams before `notFound()` runs (Partial Prerender). No data is exposed.
+- **Isolation:** the user's real GitHub account is not a demo user and has 0 project memberships, so its dashboard lists nothing; the demo boundary is covered by tests in both directions.
+- **Gemini:** live calls from the warm-up script took 28.9 s (TaskBoard, 2 milestones, 1 question, 610/332 tokens) and 114.4 s (Bakery, 3 milestones, 2 questions, 417/619 tokens) on `gemini-3.6-flash`; both passed the checks. Gemini split TaskBoard $200/$100 with no review criterion; the real output is kept. An earlier attempt failed with 403 "API key was reported as leaked": a Windows user-level `GEMINI_API_KEY` (an old leaked key) was overriding `.env.local`, because `@next/env` never overwrites variables already set. The user removed it.
+- **Tests at the end of Phase 3:** `web` 189 tests in 32 files; `spikes` 50 tests in 6 files; lint (0 errors), typecheck and build clean; GitHub CI green.
+
 ## Decisions for Phase 2
 - Neon (user note): use the pooled connection, set sslmode explicitly, and evaluate Neon's serverless driver to cut the 3-4 s connect time.
 - Screenshots (user note): browser-screenshot artifacts come only from the separate browser job that runs no repo code, never from the tests job (already how verify.yml is built).

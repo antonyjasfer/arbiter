@@ -1,6 +1,7 @@
 # Phase 3 Agreements Implementation Plan
 
 > **Status:** approved 3 Nov 2026 with changes (Brief 1 milestone split, per-user daily cap, CLAUDE.md rule 5, Phase 4 deploy note). Native execution; one fresh review of Tasks 2–7 before deploy.
+> **Complete 4 Nov 2026 IST, awaiting the user's approval.** Tasks 1–9 done; live at https://arbiter-q41f.onrender.com (26644e4, auto-deployed after CI). Results in `spikes/FINDINGS.md`, "Phase 3 live checks".
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
