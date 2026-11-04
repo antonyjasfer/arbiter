@@ -9,7 +9,7 @@ import { verifyChain } from "../audit/audit";
 import { createProject } from "../projects/projects";
 import { acceptInvite, createInvite } from "../projects/invitations";
 import { buildCompileRequest, type CompilerOutput } from "./compiler";
-import { claimJob, getJobStatus, resumeDueJobs, runJob, startCompile } from "./compile-jobs";
+import { claimJob, getJobStatus, resumeDueJobs, retryJobNow, runJob, startCompile } from "./compile-jobs";
 
 const db = setupTestDb();
 const brief = "A small task-list web app with add, complete and filter, and a health check.";
@@ -149,6 +149,19 @@ describe("compile job lifecycle", () => {
     await runJob(db(), ai, jobId, () => at(1));
     expect(await job(jobId)).toMatchObject({ status: "succeeded", live: false });
     expect(ai.calls).toBe(0);
+  });
+});
+
+describe("retryJobNow", () => {
+  it("makes a backed-off job due immediately, for the client only", async () => {
+    const jobId = await start();
+    await runJob(db(), fakeAi(busy), jobId, () => at(1));
+    expect(await retryJobNow(db(), { userId: freelancer, jobId, now: at(5) })).toEqual({ ok: false, error: "not_found" });
+    expect(await retryJobNow(db(), { userId: client, jobId, now: at(5) })).toEqual({ ok: true, value: undefined });
+    expect((await job(jobId)).nextAttemptAt).toEqual(at(5));
+    await resumeDueJobs(db(), fakeAi(good), at(5));
+    expect((await job(jobId)).status).toBe("succeeded");
+    expect(await retryJobNow(db(), { userId: client, jobId, now: at(6) })).toEqual({ ok: false, error: "not_found" });
   });
 });
 

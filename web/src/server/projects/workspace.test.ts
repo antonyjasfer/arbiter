@@ -3,7 +3,7 @@ import { setupTestDb } from "../db/test-db";
 import * as s from "../db/schema";
 import { createProject } from "./projects";
 import { acceptInvite, createInvite } from "./invitations";
-import { getWorkspace, listProjectsWithStatus } from "./workspace";
+import { getAuditTrail, getWorkspace, listProjectsWithStatus } from "./workspace";
 
 const db = setupTestDb();
 const brief = "A small task-list web app with add, complete and filter, and a health check.";
@@ -35,6 +35,7 @@ describe("getWorkspace", () => {
         parties: { client: "Cleo", freelancer: null },
         version: null,
         job: null,
+        draft: null,
         hasOpenInvite: false,
       },
     });
@@ -51,6 +52,14 @@ describe("getWorkspace", () => {
   it("is not found for outsiders and malformed ids", async () => {
     expect(await getWorkspace(db(), { userId: outsider, projectId })).toEqual({ ok: false, error: "not_found" });
     expect(await getWorkspace(db(), { userId: client, projectId: "x" })).toEqual({ ok: false, error: "not_found" });
+  });
+});
+
+describe("getAuditTrail", () => {
+  it("returns events with actor names and a verified chain, for members only", async () => {
+    const t = await getAuditTrail(db(), { userId: client, projectId });
+    expect(t).toMatchObject({ ok: true, value: { title: "TaskBoard", chain: { ok: true, count: 1 }, events: [{ seq: 1, action: "project_created", actor: "Cleo" }] } });
+    expect(await getAuditTrail(db(), { userId: outsider, projectId })).toEqual({ ok: false, error: "not_found" });
   });
 });
 

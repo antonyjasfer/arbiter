@@ -1,14 +1,19 @@
 // Read model for the project workspace and the dashboard. Everything goes through requireProjectRole,
 // so a non-member, a cross-tenant user and a malformed id all get the same "not_found".
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull } from "drizzle-orm";
+import { verifyChain, type ChainCheck } from "../audit/audit";
 import { projectBadge, type Tone } from "@/lib/format";
 import type { Result } from "@/lib/result";
+import { z } from "zod";
+import { agreementBodySchema, type AgreementBody } from "../agreements/body";
 import { getCurrentVersion, type CurrentVersion } from "../agreements/versions";
 import { requireProjectRole, type ProjectRole } from "../auth/roles";
 import type { Db } from "../db/types";
-import { compileJobs, invitations, projectMembers, projects, users } from "../db/schema";
+import { auditEvents, compileJobs, invitations, projectMembers, projects, users } from "../db/schema";
 import { moneyToCents } from "./money";
 import { listProjectsForUser } from "./projects";
+
+const draftSchema = z.object({ draft: agreementBodySchema });
 
 export type Workspace = {
   project: { id: string; title: string; brief: string; budgetCents: number; briefFlags: string[]; isDemo: boolean };
@@ -17,6 +22,8 @@ export type Workspace = {
   version: CurrentVersion | null;
   job: { id: string; status: "queued" | "running" | "succeeded" | "failed"; errorCode: string | null; errorDetail: string | null } | null;
   hasOpenInvite: boolean;
+  /** The AI draft kept on a job that failed the checks, for the client to fix by hand. */
+  draft: AgreementBody | null;
 };
 
 export async function getWorkspace(db: Db, args: { userId: string; projectId: string }): Promise<Result<Workspace, "not_found">> {
@@ -34,7 +41,7 @@ export async function getWorkspace(db: Db, args: { userId: string; projectId: st
   };
   const v = await getCurrentVersion(db, args);
   const [job] = await db
-    .select({ id: compileJobs.id, status: compileJobs.status, errorCode: compileJobs.errorCode, errorDetail: compileJobs.errorDetail })
+    .select({ id: compileJobs.id, status: compileJobs.status, errorCode: compileJobs.errorCode, errorDetail: compileJobs.errorDetail, result: compileJobs.result })
     .from(compileJobs)
     .where(eq(compileJobs.projectId, args.projectId))
     .orderBy(desc(compileJobs.createdAt))
@@ -51,13 +58,37 @@ export async function getWorkspace(db: Db, args: { userId: string; projectId: st
       role: role.value.role,
       parties: { client: nameOf("client") ?? "Client", freelancer: nameOf("freelancer") },
       version: v.ok ? v.value : null,
-      job: job ?? null,
+      job: job ? { id: job.id, status: job.status, errorCode: job.errorCode, errorDetail: job.errorDetail } : null,
       hasOpenInvite: Boolean(invite),
+      draft: job?.status === "failed" ? (draftSchema.safeParse(job.result).data?.draft ?? null) : null,
     },
   };
 }
 
-export type ProjectSummary = { id: string; title: string; role: ProjectRole; budgetCents: number; badge: { label: string; tone: Tone } };
+export async function getAuditTrail(
+  db: Db,
+  args: { userId: string; projectId: string },
+): Promise<Result<{ title: string; chain: ChainCheck; events: { seq: number; action: string; actor: string | null; data: Record<string, unknown>; createdAt: Date; hash: string }[] }, "not_found">> {
+  const role = await requireProjectRole(db, { ...args, allowed: ["client", "freelancer"] });
+  if (!role.ok) return { ok: false, error: "not_found" };
+  const [p] = await db.select({ title: projects.title }).from(projects).where(eq(projects.id, args.projectId));
+  const rows = await db
+    .select({ seq: auditEvents.seq, action: auditEvents.action, name: users.name, login: users.login, data: auditEvents.data, createdAt: auditEvents.createdAt, hash: auditEvents.hash })
+    .from(auditEvents)
+    .leftJoin(users, eq(users.id, auditEvents.actorId))
+    .where(eq(auditEvents.projectId, args.projectId))
+    .orderBy(asc(auditEvents.seq));
+  return {
+    ok: true,
+    value: {
+      title: p!.title,
+      chain: await verifyChain(db, args.projectId),
+      events: rows.map(({ name, login, data, ...r }) => ({ ...r, actor: name ?? login ?? null, data: (data ?? {}) as Record<string, unknown> })),
+    },
+  };
+}
+
+export type ProjectSummary ={ id: string; title: string; role: ProjectRole; budgetCents: number; badge: { label: string; tone: Tone } };
 
 export async function listProjectsWithStatus(db: Db, userId: string): Promise<ProjectSummary[]> {
   const list = await listProjectsForUser(db, userId);

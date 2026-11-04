@@ -1,18 +1,13 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { auth } from "@/auth";
-import { RoleSwitcher } from "@/components/role-switcher";
 import { UserMenu } from "@/components/user-menu";
-import { getActiveRole } from "@/server/active-role";
 
+// Phase 3: roles come from project membership (shown on each project), so the Phase 2 view switcher
+// is no longer in the header; it granted nothing and would now only confuse.
 async function HeaderControls() {
-  const [role, session] = await Promise.all([getActiveRole(), auth()]);
-  return (
-    <div className="flex items-center gap-4">
-      <RoleSwitcher active={role} />
-      {session?.user ? <UserMenu name={session.user.name ?? "Signed in"} image={session.user.image} /> : null}
-    </div>
-  );
+  const session = await auth();
+  return <div className="flex items-center gap-4">{session?.user ? <UserMenu name={session.user.name ?? "Signed in"} image={session.user.image} /> : null}</div>;
 }
 
 export default function AppLayout({ children }: LayoutProps<"/">) {

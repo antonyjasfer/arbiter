@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SignInButton } from "@/components/sign-in-button";
+import { DemoPanel } from "@/components/demo/demo-panel";
 
 const POINTS = [
   {
@@ -30,6 +31,7 @@ export default function Home() {
           <SignInButton />
         </div>
       </section>
+      {process.env.DEMO_MODE === "true" ? <DemoPanel /> : null}
       <section className="grid gap-4 sm:grid-cols-3">
         {POINTS.map((p) => (
           <Card key={p.title}>

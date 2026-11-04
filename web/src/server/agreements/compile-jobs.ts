@@ -159,7 +159,22 @@ export async function resumeDueJobs(db: Db, ai: StructuredAi, now: Date = new Da
   return due.length;
 }
 
-export type JobStatus = Pick<Job, "id" | "projectId" | "status" | "attempts" | "nextAttemptAt" | "errorCode" | "errorDetail" | "result" | "live">;
+/** "Retry now" on a job waiting out an AI-busy backoff. Client only; anything else is "not_found". */
+export async function retryJobNow(db: Db, args: { userId: string; jobId: string; now?: Date }): Promise<Result<void, "not_found">> {
+  if (!parseId(args.jobId)) return { ok: false, error: "not_found" };
+  const [j] = await db.select({ projectId: compileJobs.projectId }).from(compileJobs).where(eq(compileJobs.id, args.jobId));
+  if (!j) return { ok: false, error: "not_found" };
+  const role = await requireProjectRole(db, { userId: args.userId, projectId: j.projectId, allowed: ["client"] });
+  if (!role.ok) return { ok: false, error: "not_found" };
+  const [done] = await db
+    .update(compileJobs)
+    .set({ nextAttemptAt: args.now ?? new Date() })
+    .where(and(eq(compileJobs.id, args.jobId), eq(compileJobs.status, "queued")))
+    .returning({ id: compileJobs.id });
+  return done ? { ok: true, value: undefined } : { ok: false, error: "not_found" };
+}
+
+export type JobStatus =Pick<Job, "id" | "projectId" | "status" | "attempts" | "nextAttemptAt" | "errorCode" | "errorDetail" | "result" | "live">;
 
 export async function getJobStatus(db: Db, args: { userId: string; jobId: string }): Promise<Result<JobStatus, "not_found">> {
   if (!parseId(args.jobId)) return { ok: false, error: "not_found" };
