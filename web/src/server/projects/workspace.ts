@@ -1,6 +1,6 @@
 // Read model for the project workspace and the dashboard. Everything goes through requireProjectRole,
 // so a non-member, a cross-tenant user and a malformed id all get the same "not_found".
-import { and, asc, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import { verifyChain, type ChainCheck } from "../audit/audit";
 import { projectBadge, type Tone } from "@/lib/format";
 import type { Result } from "@/lib/result";
@@ -9,7 +9,7 @@ import { agreementBodySchema, type AgreementBody } from "../agreements/body";
 import { getCurrentVersion, type CurrentVersion } from "../agreements/versions";
 import { requireProjectRole, type ProjectRole } from "../auth/roles";
 import type { Db } from "../db/types";
-import { auditEvents, compileJobs, invitations, projectMembers, projects, users } from "../db/schema";
+import { agreements, agreementVersions, auditEvents, compileJobs, invitations, milestones, projectMembers, projects, users } from "../db/schema";
 import { moneyToCents } from "./money";
 import { listProjectsForUser } from "./projects";
 
@@ -85,6 +85,45 @@ export async function getAuditTrail(
       chain: await verifyChain(db, args.projectId),
       events: rows.map(({ name, login, data, ...r }) => ({ ...r, actor: name ?? login ?? null, data: (data ?? {}) as Record<string, unknown> })),
     },
+  };
+}
+
+export type LockedMilestone = {
+  id: string;
+  key: string;
+  position: number;
+  title: string;
+  amountCents: number;
+  state: (typeof milestones.$inferSelect)["state"];
+  stateVersion: number;
+  dueAt: Date | null;
+};
+
+/**
+ * The milestones of the locked agreement, in order, for the project page's per-milestone panels (Phase 4
+ * verification, Phase 5 payment). Empty until the agreement locks; "not_found" for non-members.
+ */
+export async function getLockedMilestones(db: Db, args: { userId: string; projectId: string }): Promise<Result<LockedMilestone[], "not_found">> {
+  const role = await requireProjectRole(db, { ...args, allowed: ["client", "freelancer"] });
+  if (!role.ok) return { ok: false, error: "not_found" };
+  const [a] = await db.select({ id: agreements.id }).from(agreements).where(and(eq(agreements.projectId, args.projectId), eq(agreements.status, "locked")));
+  if (!a) return { ok: true, value: [] };
+  const [v] = await db.select({ id: agreementVersions.id, body: agreementVersions.bodyJson }).from(agreementVersions).where(and(eq(agreementVersions.agreementId, a.id), isNotNull(agreementVersions.lockedAt)));
+  if (!v) return { ok: true, value: [] };
+  const body = v.body as AgreementBody;
+  const rows = await db.select().from(milestones).where(eq(milestones.agreementVersionId, v.id)).orderBy(asc(milestones.position));
+  return {
+    ok: true,
+    value: rows.map((m) => ({
+      id: m.id,
+      key: body.milestones[m.position - 1]?.key ?? `m${m.position}`,
+      position: m.position,
+      title: m.title,
+      amountCents: moneyToCents(m.amount),
+      state: m.state,
+      stateVersion: m.stateVersion,
+      dueAt: m.dueAt,
+    })),
   };
 }
 

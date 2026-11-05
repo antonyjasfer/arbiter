@@ -1,4 +1,7 @@
 // Plain-language text for every error code the server returns. Shown inline next to the action.
+// Phase 4 and Phase 5 add their codes in their own files, so the two branches never edit this one.
+import { VERIFICATION_ERROR_TEXT } from "./messages-verification";
+import { PAYMENT_ERROR_TEXT } from "./messages-payments";
 export const ERROR_TEXT: Record<string, string> = {
   invalid_input: "Check the title, brief (40 to 4,000 characters) and budget ($50 to $5,000).",
   control_characters: "Remove hidden control characters (often pasted in with the text) from the title, brief or answers.",
@@ -38,5 +41,5 @@ export const JOB_ERROR_TEXT: Record<string, string> = {
 };
 
 export function errorText(code: string): string {
-  return ERROR_TEXT[code] ?? "Something went wrong. Try again.";
+  return ERROR_TEXT[code] ?? VERIFICATION_ERROR_TEXT[code] ?? PAYMENT_ERROR_TEXT[code] ?? "Something went wrong. Try again.";
 }

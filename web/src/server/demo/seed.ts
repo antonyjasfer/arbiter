@@ -34,14 +34,16 @@ export async function demoUserId(db: Db, role: DemoRole): Promise<string | undef
   return u?.id;
 }
 
-async function upsertDemoUsers(tx: Db): Promise<Record<DemoRole, string>> {
+async function upsertDemoUsers(tx: Db, freelancerPaypalEmail?: string): Promise<Record<DemoRole, string>> {
   const ids = {} as Record<DemoRole, string>;
   for (const role of ["client", "freelancer"] as const) {
     const u = DEMO_USERS[role];
+    // The demo freelancer is paid at the sandbox email from PAYPAL_FREELANCER_EMAIL (Phase 5); a seed without one keeps it.
+    const paypal = role === "freelancer" && freelancerPaypalEmail ? { paypalEmail: freelancerPaypalEmail } : {};
     const [row] = await tx
       .insert(s.users)
-      .values({ ...u, isDemo: true })
-      .onConflictDoUpdate({ target: s.users.githubId, set: { name: u.name, login: u.login, isDemo: true } })
+      .values({ ...u, ...paypal, isDemo: true })
+      .onConflictDoUpdate({ target: s.users.githubId, set: { name: u.name, login: u.login, isDemo: true, ...paypal } })
       .returning({ id: s.users.id });
     ids[role] = row!.id;
   }
@@ -75,10 +77,10 @@ async function createDemoProjects(tx: Db, ids: Record<DemoRole, string>, model: 
 }
 
 /** Idempotent: creates the demo users and, if no demo project exists, the two seed projects. */
-export async function seedDemo(db: Db, args: { model: string; cache: DemoCache }): Promise<void> {
+export async function seedDemo(db: Db, args: { model: string; cache: DemoCache; freelancerPaypalEmail?: string }): Promise<void> {
   await db.transaction(async (tx) => {
     await lockDemo(tx);
-    const ids = await upsertDemoUsers(tx);
+    const ids = await upsertDemoUsers(tx, args.freelancerPaypalEmail);
     await loadCache(tx, args.cache);
     const [any] = await tx.select({ id: s.projects.id }).from(s.projects).where(eq(s.projects.isDemo, true)).limit(1);
     if (!any) await createDemoProjects(tx, ids, args.model, args.cache);
@@ -113,7 +115,7 @@ async function deleteDemoProjects(tx: Db) {
 }
 
 /** Demo users only, at most once per 30 s across all demo users (the demo is shared). */
-export async function resetDemo(db: Db, args: { userId: string; model: string; cache: DemoCache }): Promise<Result<void, "not_demo" | "too_soon">> {
+export async function resetDemo(db: Db, args: { userId: string; model: string; cache: DemoCache; freelancerPaypalEmail?: string }): Promise<Result<void, "not_demo" | "too_soon">> {
   if (!parseId(args.userId)) return { ok: false, error: "not_demo" };
   const [u] = await db.select({ isDemo: s.users.isDemo }).from(s.users).where(eq(s.users.id, args.userId));
   if (!u?.isDemo) return { ok: false, error: "not_demo" };
@@ -128,7 +130,7 @@ export async function resetDemo(db: Db, args: { userId: string; model: string; c
       .limit(1);
     if (recent) return { ok: false, error: "too_soon" } as const;
     await deleteDemoProjects(tx);
-    const ids = await upsertDemoUsers(tx);
+    const ids = await upsertDemoUsers(tx, args.freelancerPaypalEmail);
     await loadCache(tx, args.cache);
     const [first] = await createDemoProjects(tx, ids, args.model, args.cache);
     await appendAudit(tx, { projectId: first!, actorId: args.userId, action: "demo_reset", data: {} });

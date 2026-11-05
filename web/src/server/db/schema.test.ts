@@ -15,11 +15,44 @@ async function seedProject() {
 }
 
 describe("schema", () => {
-  it("creates all 19 tables, including compile_jobs, ai_cache and ai_usage", async () => {
+  it("creates all 20 tables, including the Phase 3 tables and check_plans", async () => {
     const r = await db().execute(sql`select table_name from information_schema.tables where table_schema = 'public'`);
     const names = r.rows.map((x) => (x as { table_name: string }).table_name);
-    expect(names).toHaveLength(19);
-    expect(names).toEqual(expect.arrayContaining(["compile_jobs", "ai_cache", "ai_usage"]));
+    expect(names).toHaveLength(20);
+    expect(names).toEqual(expect.arrayContaining(["compile_jobs", "ai_cache", "ai_usage", "check_plans"]));
+  });
+
+  // Phase 4/5 shared migration (0003): the guarantees both branches rely on.
+  async function lockedMilestone() {
+    const { user, project } = await seedProject();
+    const [agreement] = await db().insert(s.agreements).values({ projectId: project.id }).returning();
+    const [version] = await db().insert(s.agreementVersions).values({ agreementId: agreement!.id, version: 1, bodyJson: {}, hash: "h", source: "manual" }).returning();
+    const [m] = await db().insert(s.milestones).values({ agreementVersionId: version!.id, position: 1, title: "M", amount: "150.00" }).returning();
+    return { user, milestone: m! };
+  }
+
+  it("allows one live payment per milestone, and any number of superseded ones", async () => {
+    const { milestone } = await lockedMilestone();
+    await db().insert(s.payments).values({ milestoneId: milestone.id, status: "voided", amount: "150.00", supersededAt: new Date() });
+    await db().insert(s.payments).values({ milestoneId: milestone.id, status: "authorized", amount: "150.00", paypalOrderId: "ORDER-1" });
+    await expect(db().insert(s.payments).values({ milestoneId: milestone.id, status: "created", amount: "150.00" })).rejects.toThrow();
+    await expect(db().insert(s.payments).values({ milestoneId: milestone.id, status: "x", amount: "1.00", paypalOrderId: "ORDER-1", supersededAt: new Date() })).rejects.toThrow();
+  });
+
+  it("allows one live submission per milestone and stores evidence bytes with their size", async () => {
+    const { user, milestone } = await lockedMilestone();
+    const sub = { milestoneId: milestone.id, repoUrl: "https://github.com/a/b", commitSha: "a".repeat(40), deployUrl: "https://x.onrender.com", submittedBy: user.id };
+    const [first] = await db().insert(s.submissions).values(sub).returning();
+    await expect(db().insert(s.submissions).values(sub)).rejects.toThrow();
+    await db().update(s.submissions).set({ supersededAt: new Date() }).where(eq(s.submissions.id, first!.id));
+    await db().insert(s.submissions).values(sub);
+    const [run] = await db().insert(s.verificationRuns).values({ submissionId: first!.id }).returning();
+    expect(run!.dispatchKey).toMatch(/^[0-9a-f-]{36}$/);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const [ev] = await db().insert(s.evidence).values({ runId: run!.id, type: "screenshot", uri: "/api/evidence/x", sha256: "b".repeat(64), content: png, contentType: "image/png", byteSize: 4 }).returning();
+    const [read] = await db().select().from(s.evidence).where(eq(s.evidence.id, ev!.id));
+    expect(Buffer.from(read!.content!)).toEqual(png);
+    expect(read!.checkResultId).toBeNull();
   });
 
   it("allows only one freelancer per project", async () => {

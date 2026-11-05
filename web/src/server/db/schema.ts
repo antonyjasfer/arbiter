@@ -18,6 +18,10 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { customType } from "drizzle-orm/pg-core";
+
+// Postgres bytea as a Node Buffer (evidence screenshots; drizzle 0.45 has no built-in bytea column).
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 import { MILESTONE_STATES } from "../milestones/state-machine";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
@@ -32,7 +36,7 @@ export const criterionKind = pgEnum("criterion_kind", ["test", "browser", "stati
 export const runStatus = pgEnum("run_status", ["queued", "running", "completed", "errored"]);
 export const verdict = pgEnum("verdict", ["pass", "fail", "needs_review"]);
 export const verdictSource = pgEnum("verdict_source", ["deterministic", "ai"]);
-export const evidenceType = pgEnum("evidence_type", ["log", "screenshot", "diff"]);
+export const evidenceType = pgEnum("evidence_type", ["log", "screenshot", "diff", "results", "run_link"]);
 export const compileJobStatus = pgEnum("compile_job_status", ["queued", "running", "succeeded", "failed"]);
 
 export const users = pgTable("users", {
@@ -169,24 +173,61 @@ export const submissions = pgTable(
     commitSha: char("commit_sha", { length: 40 }).notNull(),
     deployUrl: text("deploy_url").notNull(),
     submittedBy: uuid("submitted_by").notNull().references(() => users.id),
+    // Phase 4: text aimed at AI reviewers found in the repo at this commit (read via the GitHub API, never run).
+    injectionFlags: jsonb("injection_flags").$type<unknown[]>().notNull().default(sql`'[]'::jsonb`),
+    injectionScannedAt: ts("injection_scanned_at"),
+    // Set when a resubmission replaces this one; at most one live submission per milestone.
+    supersededAt: ts("superseded_at"),
     createdAt: createdAt(),
   },
-  (t) => [index("submissions_milestone_idx").on(t.milestoneId), index("submissions_submitted_by_idx").on(t.submittedBy)],
+  (t) => [
+    index("submissions_milestone_idx").on(t.milestoneId),
+    index("submissions_submitted_by_idx").on(t.submittedBy),
+    uniqueIndex("submissions_one_live_per_milestone").on(t.milestoneId).where(sql`${t.supersededAt} is null`),
+  ],
 );
 
+// Phase 4: the Check Planner's output for a milestone (a validated DSL, never code), reused across
+// resubmissions while the criteria are unchanged.
+export const checkPlans = pgTable("check_plans", {
+  id: id(),
+  milestoneId: uuid("milestone_id").notNull().unique().references(() => milestones.id),
+  criteriaHash: char("criteria_hash", { length: 64 }).notNull(),
+  plan: jsonb("plan").notNull(),
+  model: text("model").notNull(),
+  createdAt: createdAt(),
+});
+
+// A verification run is a DB job with a lease, like compile_jobs: dispatched to arbiter-runner, matched
+// to its workflow run by dispatch_key (the run-name), polled, and timed out at deadline_at.
 export const verificationRuns = pgTable(
   "verification_runs",
   {
     id: id(),
     submissionId: uuid("submission_id").notNull().references(() => submissions.id),
+    requestedBy: uuid("requested_by").references(() => users.id),
     status: runStatus("status").notNull().default("queued"),
+    dispatchKey: uuid("dispatch_key").notNull().unique().defaultRandom(),
+    plan: jsonb("plan"),
+    planHash: char("plan_hash", { length: 64 }),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: ts("next_attempt_at").notNull().defaultNow(),
+    leaseUntil: ts("lease_until"),
+    deadlineAt: ts("deadline_at"),
     workflowRunId: bigint("workflow_run_id", { mode: "number" }),
     runUrl: text("run_url"),
+    jobsSummary: jsonb("jobs_summary"),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
     startedAt: ts("started_at"),
     finishedAt: ts("finished_at"),
     createdAt: createdAt(),
   },
-  (t) => [index("verification_runs_submission_idx").on(t.submissionId)],
+  (t) => [
+    index("verification_runs_submission_idx").on(t.submissionId),
+    index("verification_runs_requested_by_idx").on(t.requestedBy),
+    index("verification_runs_due_idx").on(t.status, t.nextAttemptAt),
+  ],
 );
 
 export const checkResults = pgTable(
@@ -199,22 +240,37 @@ export const checkResults = pgTable(
     source: verdictSource("source").notNull(),
     confidence: numeric("confidence", { precision: 3, scale: 2, mode: "string" }),
     summary: text("summary"),
+    // Phase 4: the deterministic step results behind the verdict, and the Evidence Reviewer's plain-language
+    // summary (which can never change the verdict).
+    detail: jsonb("detail"),
+    aiSummary: text("ai_summary"),
     createdAt: createdAt(),
   },
-  (t) => [index("check_results_run_idx").on(t.runId), index("check_results_criterion_idx").on(t.criterionId)],
+  (t) => [
+    index("check_results_run_idx").on(t.runId),
+    index("check_results_criterion_idx").on(t.criterionId),
+    unique("check_results_run_criterion_uq").on(t.runId, t.criterionId),
+  ],
 );
 
 export const evidence = pgTable(
   "evidence",
   {
     id: id(),
-    checkResultId: uuid("check_result_id").notNull().references(() => checkResults.id),
+    // A criterion's evidence, or (check_result_id null) run-level evidence such as the public run link.
+    checkResultId: uuid("check_result_id").references(() => checkResults.id),
+    runId: uuid("run_id").references(() => verificationRuns.id),
     type: evidenceType("type").notNull(),
+    label: text("label"),
     uri: text("uri").notNull(),
     sha256: char("sha256", { length: 64 }).notNull(),
+    // Screenshots and results files are stored here (size-capped) and served by Arbiter.
+    content: bytea("content"),
+    contentType: text("content_type"),
+    byteSize: integer("byte_size"),
     createdAt: createdAt(),
   },
-  (t) => [index("evidence_check_result_idx").on(t.checkResultId)],
+  (t) => [index("evidence_check_result_idx").on(t.checkResultId), index("evidence_run_idx").on(t.runId)],
 );
 
 // Revision 2: the "Disagree" button stores a comment here.
@@ -230,21 +286,53 @@ export const disputes = pgTable(
   (t) => [index("disputes_milestone_idx").on(t.milestoneId), index("disputes_author_idx").on(t.authorId)],
 );
 
+// One row per funding attempt of a milestone. A lost or voided authorization is superseded by the next
+// funding attempt, so at most one live payment exists per milestone. Statuses mirror what PayPal reported
+// at the last reconcile; state_version guards every update.
 export const payments = pgTable(
   "payments",
   {
     id: id(),
     milestoneId: uuid("milestone_id").notNull().references(() => milestones.id),
+    createdBy: uuid("created_by").references(() => users.id),
     paypalOrderId: text("paypal_order_id"),
     authorizationId: text("authorization_id"),
     captureId: text("capture_id"),
     payoutBatchId: text("payout_batch_id"),
+    payoutItemId: text("payout_item_id"),
     status: text("status").notNull(),
+    authorizationStatus: text("authorization_status"),
+    captureStatus: text("capture_status"),
+    payoutStatus: text("payout_status"),
     amount: money("amount").notNull(),
+    fee: money("fee"),
+    payoutAmount: money("payout_amount"),
+    payeeEmail: text("payee_email"),
+    authorizationExpiresAt: ts("authorization_expires_at"),
+    honorPeriodEndsAt: ts("honor_period_ends_at"),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: ts("approved_at"),
+    // A written client override that allows release despite a FAIL (payment guard).
+    overrideReason: text("override_reason"),
+    voidedAt: ts("voided_at"),
+    lastReconciledAt: ts("last_reconciled_at"),
     requestIds: jsonb("request_ids").notNull().default(sql`'{}'::jsonb`),
+    stateVersion: integer("state_version").notNull().default(0),
+    supersededAt: ts("superseded_at"),
     createdAt: createdAt(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
   },
-  (t) => [index("payments_milestone_idx").on(t.milestoneId)],
+  (t) => [
+    index("payments_milestone_idx").on(t.milestoneId),
+    uniqueIndex("payments_one_live_per_milestone").on(t.milestoneId).where(sql`${t.supersededAt} is null`),
+    uniqueIndex("payments_paypal_order_uq").on(t.paypalOrderId),
+    index("payments_authorization_idx").on(t.authorizationId),
+    index("payments_capture_idx").on(t.captureId),
+    index("payments_payout_batch_idx").on(t.payoutBatchId),
+    index("payments_payout_item_idx").on(t.payoutItemId),
+    index("payments_created_by_idx").on(t.createdBy),
+    index("payments_approved_by_idx").on(t.approvedBy),
+  ],
 );
 
 export const webhookEvents = pgTable("webhook_events", {

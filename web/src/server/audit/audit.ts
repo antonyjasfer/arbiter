@@ -19,6 +19,27 @@ export const AUDIT_ACTIONS = [
   "approved",
   "locked",
   "demo_reset",
+  // Phase 4: verification.
+  "submission_created",
+  "resubmitted",
+  "verification_started",
+  "verification_finished",
+  "verification_errored",
+  "injection_flagged",
+  // Phase 5: payments.
+  "funding_started",
+  "funded",
+  "authorization_lost",
+  "funding_voided",
+  "release_approved",
+  "override_recorded",
+  "capture_pending",
+  "capture_completed",
+  "capture_denied",
+  "payout_sent",
+  "payout_succeeded",
+  "payout_failed",
+  "paypal_email_set",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

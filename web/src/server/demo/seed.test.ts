@@ -39,6 +39,15 @@ beforeEach(async () => {
 });
 
 describe("seedDemo", () => {
+  it("gives the demo freelancer the sandbox PayPal email when one is configured", async () => {
+    await seedDemo(db(), { model: MODEL, cache: fixture(), freelancerPaypalEmail: "freelancer@example.test" });
+    const [f] = await db().select().from(s.users).where(eq(s.users.githubId, "demo:freelancer"));
+    expect(f!.paypalEmail).toBe("freelancer@example.test");
+    await seedDemo(db(), { model: MODEL, cache: fixture() }); // a later seed without one keeps it
+    const [again] = await db().select().from(s.users).where(eq(s.users.githubId, "demo:freelancer"));
+    expect(again!.paypalEmail).toBe("freelancer@example.test");
+  });
+
   it("is idempotent: two demo users and two demo projects", async () => {
     await seedDemo(db(), { model: MODEL, cache: fixture() });
     await seedDemo(db(), { model: MODEL, cache: fixture() });

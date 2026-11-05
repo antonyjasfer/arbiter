@@ -26,6 +26,13 @@ services:
         value: "true"
       - key: GEMINI_API_KEY
         sync: false
+      # Phase 4 (verification runner) and Phase 5 (payout to the demo freelancer).
+      - key: GITHUB_RUNNER_TOKEN
+        sync: false
+      - key: RUNNER_REPO
+        value: antonyjasfer/arbiter-runner
+      - key: PAYPAL_FREELANCER_EMAIL
+        sync: false
       - key: AUTH_SECRET
         sync: false
       - key: AUTH_GITHUB_ID

@@ -22,6 +22,11 @@ const schema = z.object({
   GEMINI_MODEL: z.preprocess(blankToUndefined, z.string().default(DEFAULT_GEMINI_MODEL)),
   // Demo sign-in exists only when this is exactly "true".
   DEMO_MODE: z.preprocess((v) => v === "true", z.boolean()),
+  // Phase 4 (verification runner) and Phase 5 (payouts). Optional so the app boots without them; the
+  // feature that needs one reports clearly when it is missing.
+  GITHUB_RUNNER_TOKEN: z.preprocess(blankToUndefined, z.string().optional()),
+  RUNNER_REPO: z.preprocess(blankToUndefined, z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).optional()),
+  PAYPAL_FREELANCER_EMAIL: z.preprocess(blankToUndefined, z.email().optional()),
 });
 
 export type ServerEnv = z.infer<typeof schema>;

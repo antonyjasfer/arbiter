@@ -12,6 +12,21 @@ const valid = {
   GEMINI_API_KEY: "gemini-key-value-6",
 };
 
+describe("phase 4 and 5 variables", () => {
+  it("leaves the runner and payout settings optional, so the app still boots without them", () => {
+    const env = parseServerEnv(valid);
+    expect(env.GITHUB_RUNNER_TOKEN).toBeUndefined();
+    expect(env.RUNNER_REPO).toBeUndefined();
+    expect(env.PAYPAL_FREELANCER_EMAIL).toBeUndefined();
+  });
+
+  it("checks the runner repo and payout email formats when they are set", () => {
+    expect(parseServerEnv({ ...valid, RUNNER_REPO: "antonyjasfer/arbiter-runner", PAYPAL_FREELANCER_EMAIL: "f@example.test" })).toMatchObject({ RUNNER_REPO: "antonyjasfer/arbiter-runner" });
+    expect(() => parseServerEnv({ ...valid, RUNNER_REPO: "not a repo" })).toThrow(/RUNNER_REPO/);
+    expect(() => parseServerEnv({ ...valid, PAYPAL_FREELANCER_EMAIL: "nope" })).toThrow(/PAYPAL_FREELANCER_EMAIL/);
+  });
+});
+
 describe("phase 3 variables", () => {
   it("requires GEMINI_API_KEY", () => {
     const rest: Record<string, string | undefined> = { ...valid };

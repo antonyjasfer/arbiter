@@ -96,3 +96,9 @@
 - Phase 3 (user note): AI calls can take up to about 30 s, so the agreement compiler must run as a background job with a progress state in the UI and never block a request.
 - Webhooks: register through the API (`03-webhook/register-webhook.ts`), since the dashboard form rejected the Render URL. Handlers are order-independent; add a capture-pending state; payout waits for a COMPLETED capture read back from PayPal.
 - Cold starts: the first request after idle takes about 24 s or more; persist state and never rely on in-process timers.
+
+## Phase 4 live checks
+_Filled in by the phase-4-verification branch. Phase 5 never edits this section._
+
+## Phase 5 live checks
+_Filled in by the phase-5-payments branch. Phase 4 never edits this section._

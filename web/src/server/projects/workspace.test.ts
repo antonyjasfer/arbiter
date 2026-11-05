@@ -3,7 +3,8 @@ import { setupTestDb } from "../db/test-db";
 import * as s from "../db/schema";
 import { createProject } from "./projects";
 import { acceptInvite, createInvite } from "./invitations";
-import { getAuditTrail, getWorkspace, listProjectsWithStatus } from "./workspace";
+import { getAuditTrail, getLockedMilestones, getWorkspace, listProjectsWithStatus } from "./workspace";
+import { approve, createManualVersion } from "../agreements/versions";
 
 const db = setupTestDb();
 const brief = "A small task-list web app with add, complete and filter, and a health check.";
@@ -60,6 +61,29 @@ describe("getAuditTrail", () => {
     const t = await getAuditTrail(db(), { userId: client, projectId });
     expect(t).toMatchObject({ ok: true, value: { title: "TaskBoard", chain: { ok: true, count: 1 }, events: [{ seq: 1, action: "project_created", actor: "Cleo" }] } });
     expect(await getAuditTrail(db(), { userId: outsider, projectId })).toEqual({ ok: false, error: "not_found" });
+  });
+});
+
+describe("getLockedMilestones", () => {
+  it("is empty until the agreement locks, then lists AGREED milestones in order, for members only", async () => {
+    expect(await getLockedMilestones(db(), { userId: client, projectId })).toEqual({ ok: true, value: [] });
+    const inv = await createInvite(db(), { userId: client, projectId });
+    if (!inv.ok) throw new Error("setup");
+    await acceptInvite(db(), { userId: freelancer, token: inv.value.token });
+    const body = {
+      milestones: [
+        { title: "Working app", amountCents: 20000, dueInDays: 14, criteria: [{ kind: "test" as const, text: "npm test passes." }] },
+        { title: "Filters", amountCents: 10000, dueInDays: 21, criteria: [{ kind: "browser" as const, text: "Active hides completed tasks." }] },
+      ],
+      questions: [],
+    };
+    const v = await createManualVersion(db(), { userId: client, projectId, body });
+    if (!v.ok) throw new Error("setup");
+    await approve(db(), { userId: client, projectId, expectedHash: v.value.hash });
+    await approve(db(), { userId: freelancer, projectId, expectedHash: v.value.hash });
+    const r = await getLockedMilestones(db(), { userId: freelancer, projectId });
+    expect(r).toMatchObject({ ok: true, value: [{ position: 1, key: "m1", title: "Working app", amountCents: 20000, state: "AGREED" }, { position: 2, key: "m2", amountCents: 10000 }] });
+    expect(await getLockedMilestones(db(), { userId: outsider, projectId })).toEqual({ ok: false, error: "not_found" });
   });
 });
 

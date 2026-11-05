@@ -9,7 +9,8 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { formatCents } from "@/lib/format";
 import { requireUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
-import { getWorkspace } from "@/server/projects/workspace";
+import { getLockedMilestones, getWorkspace } from "@/server/projects/workspace";
+import { LockedMilestones } from "@/components/agreement/locked-milestones";
 
 const START_ERRORS = new Set(["daily_cap", "demo_cap", "job_running", "locked"]);
 
@@ -20,6 +21,7 @@ async function ProjectWorkspace({ params, searchParams }: PageProps<"/projects/[
   const r = await getWorkspace(getDb(), { userId: user.value.userId, projectId });
   if (!r.ok) notFound();
   const ws = r.value;
+  const locked = await getLockedMilestones(getDb(), { userId: user.value.userId, projectId });
   const startError = typeof sp.compile === "string" && START_ERRORS.has(sp.compile) && !ws.version ? sp.compile : null;
   const flagged = ws.project.briefFlags.includes("ai_instructions");
 
@@ -76,7 +78,10 @@ async function ProjectWorkspace({ params, searchParams }: PageProps<"/projects/[
           {ws.role === "client" && !ws.parties.freelancer ? <InviteCard projectId={ws.project.id} hasOpenInvite={ws.hasOpenInvite} /> : null}
         </aside>
         <section aria-label="Agreement">
-          <AgreementWorkspace ws={ws} failedDraft={ws.draft} startError={startError} />
+          <div className="flex flex-col gap-6">
+            <AgreementWorkspace ws={ws} failedDraft={ws.draft} startError={startError} />
+            <LockedMilestones projectId={ws.project.id} milestones={locked.ok ? locked.value : []} role={ws.role} />
+          </div>
         </section>
       </div>
     </>

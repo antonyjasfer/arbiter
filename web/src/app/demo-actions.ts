@@ -20,7 +20,7 @@ export async function resetDemoAction(): Promise<{ ok: boolean; error?: string }
   if (!serverEnv().DEMO_MODE) return { ok: false, error: "not_demo" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
-  const r = await resetDemo(getDb(), { userId: user.value.userId, model: serverEnv().GEMINI_MODEL, cache: cache as DemoCache });
+  const r = await resetDemo(getDb(), { userId: user.value.userId, model: serverEnv().GEMINI_MODEL, cache: cache as DemoCache, freelancerPaypalEmail: serverEnv().PAYPAL_FREELANCER_EMAIL });
   if (!r.ok) return { ok: false, error: r.error };
   revalidatePath("/dashboard");
   return { ok: true };
