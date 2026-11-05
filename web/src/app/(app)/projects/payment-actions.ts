@@ -9,6 +9,7 @@ import { requireUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
 import { getPaypalApi } from "@/server/payments/default-api";
 import { completeFunding, startFunding } from "@/server/payments/funding";
+import { setPaypalEmail } from "@/server/payments/payee";
 import type { ActionResult } from "./actions";
 
 const orderIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,64}$/);
@@ -31,4 +32,14 @@ export async function completeFundingAction(projectId: string, milestoneId: stri
   revalidatePath(`/projects/${projectId}`);
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, value: { state: r.value.state } };
+}
+
+export async function setPaypalEmailAction(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {
+  const user = await requireUser();
+  if (!user.ok) return { ok: false, error: "unauthenticated" };
+  const email = form.get("paypalEmail");
+  const r = await setPaypalEmail(getDb(), { userId: user.value.userId, email: typeof email === "string" ? email : "" });
+  if (!r.ok) return { ok: false, error: r.error };
+  revalidatePath("/settings");
+  return { ok: true, value: undefined };
 }

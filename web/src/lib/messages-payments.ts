@@ -12,4 +12,6 @@ export const PAYMENT_ERROR_TEXT: Record<string, string> = {
   conflict: "Someone else changed this milestone at the same moment. Reload the page.",
   paypal_sdk_failed: "The PayPal button couldn't load. Check your connection or ad blocker, then reload.",
   paypal_cancelled: "You closed PayPal before approving. Nothing was charged.",
+  invalid_email: "Enter a valid email address (up to 254 characters).",
+  demo_locked: "Demo accounts use a seeded sandbox email, so it can't be changed.",
 };
