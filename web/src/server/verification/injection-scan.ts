@@ -82,7 +82,7 @@ export async function scanRepo<E>(deps: {
   const tree = await deps.listTree();
   if (!tree.ok) return tree;
   const { paths, truncated } = selectScanPaths(tree.value);
-  const files = paths.length ? await deps.getFiles(paths) : ({ ok: true, value: [] } as const);
+  const files: Result<{ path: string; content: string }[], E> = paths.length ? await deps.getFiles(paths) : { ok: true, value: [] };
   if (!files.ok) return files;
   return { ok: true, value: { flags: scanFiles(files.value), truncated, scanned: files.value.length } };
 }
