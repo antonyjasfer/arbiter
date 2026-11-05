@@ -11,7 +11,7 @@ import type { Db } from "../db/types";
 import { acceptanceCriteria, agreements, agreementVersions, milestones, projects } from "../db/schema";
 import { transitionMilestone } from "../milestones/transition";
 import { centsToMoney, moneyToCents } from "../projects/money";
-import type { AgreementBody } from "./body";
+import type { AgreementBody, AgreementBodyInput } from "./body";
 import { checkBody, type CheckProblem } from "./compiler";
 import { feeFor } from "./fees";
 
@@ -85,12 +85,15 @@ export async function applyCompileResult(
 /** The client writes the next version by hand: after a failed compile, past a daily cap, or from scratch. */
 export async function createManualVersion(
   db: Db,
-  args: { userId: string; projectId: string; body: AgreementBody },
+  args: { userId: string; projectId: string; body: AgreementBodyInput },
 ): Promise<Result<{ version: number; hash: string }, VersionError>> {
   const role = await requireProjectRole(db, { userId: args.userId, projectId: args.projectId, allowed: ["client"] });
   if (!role.ok) return { ok: false, error: { code: role.error } };
   const [p] = await db.select({ budget: projects.budget }).from(projects).where(eq(projects.id, args.projectId));
-  const checked = checkBody(args.body, moneyToCents(p!.budget));
+  // Keys continue from the latest version, if any, so none is ever reused.
+  const [a] = await db.select({ id: agreements.id }).from(agreements).where(eq(agreements.projectId, args.projectId));
+  const latest = a ? await currentRow(db, a.id) : undefined;
+  const checked = checkBody(args.body, moneyToCents(p!.budget), latest ? (latest.bodyJson as AgreementBody) : undefined);
   if (!checked.ok) return { ok: false, error: { code: "invalid_body", problems: checked.error } };
   const body = checked.value;
   try {
@@ -129,14 +132,11 @@ export async function getCurrentVersion(db: Db, args: { userId: string; projectI
 
 export async function saveEdit(
   db: Db,
-  args: { userId: string; projectId: string; expectedHash: string; body: AgreementBody },
+  args: { userId: string; projectId: string; expectedHash: string; body: AgreementBodyInput },
 ): Promise<Result<{ version: number; hash: string }, VersionError>> {
   const role = await requireProjectRole(db, { userId: args.userId, projectId: args.projectId, allowed: ["client"] });
   if (!role.ok) return { ok: false, error: { code: role.error } };
   const [p] = await db.select({ budget: projects.budget }).from(projects).where(eq(projects.id, args.projectId));
-  const checked = checkBody(args.body, moneyToCents(p!.budget));
-  if (!checked.ok) return { ok: false, error: { code: "invalid_body", problems: checked.error } };
-  const body = checked.value;
   return db.transaction(async (tx) => {
     const a = await lockAgreement(tx, args.projectId);
     if (!a) return { ok: false, error: { code: "no_version" } } as const;
@@ -144,6 +144,10 @@ export async function saveEdit(
     const v = await currentRow(tx, a.id);
     if (!v) return { ok: false, error: { code: "no_version" } } as const;
     if (v.hash !== args.expectedHash) return { ok: false, error: { code: "stale" } } as const;
+    // Checked against the version being edited, so its keys stay as they are and new ones continue from it.
+    const checked = checkBody(args.body, moneyToCents(p!.budget), v.bodyJson as AgreementBody);
+    if (!checked.ok) return { ok: false, error: { code: "invalid_body", problems: checked.error } } as const;
+    const body = checked.value;
     const approved = Boolean(v.clientApprovedAt || v.freelancerApprovedAt);
     // In place only for an unapproved hand-written version. The AI's draft is never rewritten, so its
     // provenance stays visible: editing it, or anything already approved, makes a new version.

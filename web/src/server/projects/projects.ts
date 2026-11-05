@@ -3,6 +3,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Result } from "@/lib/result";
+import { hasControlChars } from "@/lib/text";
 import { flagBrief } from "../agreements/brief-flags";
 import { appendAudit } from "../audit/audit";
 import type { Db } from "../db/types";
@@ -21,7 +22,8 @@ export const projectInputSchema = z.object({
 export async function createProject(
   db: Db,
   args: { userId: string; title: string; brief: string; budgetCents: number },
-): Promise<Result<{ projectId: string }, "invalid_input">> {
+): Promise<Result<{ projectId: string }, "invalid_input" | "control_characters">> {
+  if (hasControlChars(String(args.title), "line") || hasControlChars(String(args.brief), "multiline")) return { ok: false, error: "control_characters" };
   const input = projectInputSchema.safeParse(args);
   if (!input.success) return { ok: false, error: "invalid_input" };
   const { title, brief, budgetCents } = input.data;

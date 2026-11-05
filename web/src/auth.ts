@@ -5,6 +5,7 @@ import { getDb } from "@/server/db/client";
 import { githubProfileSchema } from "@/server/auth/github-profile";
 import { upsertGithubUser } from "@/server/auth/upsert-user";
 import { buildProviders } from "@/server/demo/providers";
+import { isMalformedRoute, requiresSignIn } from "@/lib/route-ids";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   // DEMO_MODE is read directly (not via serverEnv) because this module is also loaded at build time,
@@ -27,7 +28,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (typeof token.uid === "string") session.user.id = token.uid;
       return session;
     },
-    authorized({ auth: session }) {
+    authorized({ auth: session, request }) {
+      const path = request.nextUrl.pathname;
+      // Malformed ids fall through to the proxy's 404; public pages (invite links) need no session.
+      if (isMalformedRoute(path) || !requiresSignIn(path)) return true;
       return Boolean(session?.user?.id);
     },
   },

@@ -10,7 +10,7 @@ import { FieldError, FieldHint, Input, Label, Select, Textarea } from "@/compone
 import { StatusBadge } from "@/components/ui/status-badge";
 import { dollarsToCents, formatCents, formatIst, shortHash } from "@/lib/format";
 import { errorText, JOB_ERROR_TEXT, PROBLEM_TEXT } from "@/lib/messages";
-import type { AgreementBody, CriterionKind } from "@/server/agreements/body";
+import type { AgreementBody, AgreementBodyInput, CriterionKind } from "@/server/agreements/body";
 import { feeFor } from "@/server/agreements/fees";
 import type { Workspace } from "@/server/projects/workspace";
 import { CompileStatus } from "./compile-status";
@@ -305,29 +305,31 @@ function ApprovalBar({ ws }: { ws: Workspace }) {
   );
 }
 
-type DraftMilestone = { title: string; amount: string; dueInDays: string; criteria: { kind: CriterionKind; text: string }[] };
+// key is kept from the version being edited and left out for new items; the server assigns new keys.
+type DraftMilestone = { key?: string; title: string; amount: string; dueInDays: string; criteria: { key?: string; kind: CriterionKind; text: string }[] };
 
 function toDraft(body: AgreementBody): DraftMilestone[] {
   return body.milestones.map((m) => ({
+    key: m.key,
     title: m.title,
     amount: (m.amountCents / 100).toFixed(2),
     dueInDays: String(m.dueInDays),
-    criteria: m.criteria.map((c) => ({ kind: c.kind, text: c.text })),
+    criteria: m.criteria.map((c) => ({ key: c.key, kind: c.kind, text: c.text })),
   }));
 }
 
-function fromDraft(draft: DraftMilestone[], questions: AgreementBody["questions"]): AgreementBody | null {
-  const milestones: AgreementBody["milestones"] = [];
-  for (const [i, m] of draft.entries()) {
+function fromDraft(draft: DraftMilestone[], questions: AgreementBody["questions"]): AgreementBodyInput | null {
+  const milestones: AgreementBodyInput["milestones"] = [];
+  for (const m of draft) {
     const amountCents = dollarsToCents(m.amount);
     const dueInDays = Number.parseInt(m.dueInDays, 10);
     if (amountCents === null || !Number.isFinite(dueInDays)) return null;
     milestones.push({
-      key: `m${i + 1}`,
+      key: m.key,
       title: m.title.trim(),
       amountCents,
       dueInDays,
-      criteria: m.criteria.map((c, j) => ({ key: `m${i + 1}c${j + 1}`, kind: c.kind, text: c.text.trim(), needsHumanJudgment: c.kind === "review" })),
+      criteria: m.criteria.map((c) => ({ key: c.key, kind: c.kind, text: c.text.trim() })),
     });
   }
   return { milestones, questions };

@@ -49,6 +49,14 @@ describe("createProject", () => {
     expect(p!.isDemo).toBe(true);
   });
 
+  it("rejects control characters with their own error, never a database error", async () => {
+    expect(await createProject(db(), { userId: alice, title: "Task\u0000Board", brief, budgetCents: 30000 })).toEqual({ ok: false, error: "control_characters" });
+    expect(await createProject(db(), { userId: alice, title: "TaskBoard", brief: `${brief}\u0000`, budgetCents: 30000 })).toEqual({ ok: false, error: "control_characters" });
+    expect(await createProject(db(), { userId: alice, title: "Line\nbreak", brief, budgetCents: 30000 })).toEqual({ ok: false, error: "control_characters" });
+    // Newlines and tabs are fine in a brief.
+    expect((await createProject(db(), { userId: alice, title: "TaskBoard", brief: `${brief}\n\n\tMore detail here.`, budgetCents: 30000 })).ok).toBe(true);
+  });
+
   it("rejects out-of-range input", async () => {
     for (const bad of [
       { title: "", brief, budgetCents: 30000 },

@@ -9,24 +9,42 @@ export const MAX_MILESTONES = 6;
 export const MAX_CRITERIA = 8;
 export const MIN_MILESTONE_CENTS = 5_000;
 
+// Keys identify a milestone or criterion across versions (Phase 4 maps verdicts to them), so they are
+// stable: an existing key never changes, and a new item gets the next free key (see checkBody).
+export const MILESTONE_KEY = /^m\d{1,3}$/;
+export const CRITERION_KEY = /^m\d{1,3}c\d{1,3}$/;
+
+const milestoneFields = {
+  title: z.string().trim().min(1).max(120),
+  amountCents: z.number().int().min(0).max(500_000),
+  dueInDays: z.number().int().min(1).max(90),
+};
+const criterionFields = { kind: z.enum(CRITERION_KINDS), text: z.string().trim().min(1).max(500) };
+const questionsSchema = z.array(z.object({ key: z.string().regex(/^q\d{1,2}$/), question: z.string().min(1).max(300), why: z.string().max(300) })).max(5);
+
+/** A stored body: every key present. */
 export const agreementBodySchema = z.object({
   milestones: z.array(
     z.object({
-      key: z.string().regex(/^m\d{1,2}$/),
-      title: z.string().trim().min(1).max(120),
-      amountCents: z.number().int().min(0).max(500_000),
-      dueInDays: z.number().int().min(1).max(90),
-      criteria: z.array(
-        z.object({
-          key: z.string().regex(/^m\d{1,2}c\d{1,2}$/),
-          kind: z.enum(CRITERION_KINDS),
-          text: z.string().trim().min(1).max(500),
-          needsHumanJudgment: z.boolean(),
-        }),
-      ),
+      key: z.string().regex(MILESTONE_KEY),
+      ...milestoneFields,
+      criteria: z.array(z.object({ key: z.string().regex(CRITERION_KEY), ...criterionFields, needsHumanJudgment: z.boolean() })),
     }),
   ),
-  questions: z.array(z.object({ key: z.string().regex(/^q\d{1,2}$/), question: z.string().min(1).max(300), why: z.string().max(300) })).max(5),
+  questions: questionsSchema,
+});
+
+/** What a hand edit sends: new milestones and criteria come without keys; the server assigns them. */
+export const agreementBodyInputSchema = z.object({
+  milestones: z.array(
+    z.object({
+      key: z.string().regex(MILESTONE_KEY).optional(),
+      ...milestoneFields,
+      criteria: z.array(z.object({ key: z.string().regex(CRITERION_KEY).optional(), ...criterionFields, needsHumanJudgment: z.boolean().optional() })),
+    }),
+  ),
+  questions: questionsSchema,
 });
 
 export type AgreementBody = z.infer<typeof agreementBodySchema>;
+export type AgreementBodyInput = z.input<typeof agreementBodyInputSchema>;

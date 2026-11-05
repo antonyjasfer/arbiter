@@ -5,6 +5,7 @@
 import { and, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { parseId } from "@/lib/ids";
 import type { Result } from "@/lib/result";
+import { hasControlChars } from "@/lib/text";
 import { cacheKeyFor, withCache, type StructuredAi } from "../ai/structured-ai";
 import { dbCacheStore } from "../ai/db-cache";
 import { appendAudit } from "../audit/audit";
@@ -23,7 +24,7 @@ export const REAL_DAILY_CAP = 10; // user decision, 3 Nov 2026
 export const DEMO_DAILY_CAP = 20;
 
 type Job = typeof compileJobs.$inferSelect;
-export type StartError = "not_member" | "forbidden" | "job_running" | "locked" | "demo_cap" | "daily_cap";
+export type StartError = "not_member" | "forbidden" | "job_running" | "locked" | "demo_cap" | "daily_cap" | "control_characters";
 
 /** The UTC day a live call counts against (caps reset at 00:00 UTC = 05:30 IST). */
 function utcDay(now: Date): string {
@@ -40,6 +41,9 @@ export async function startCompile(
 ): Promise<Result<{ jobId: string }, StartError>> {
   const role = await requireProjectRole(db, { userId: args.userId, projectId: args.projectId, allowed: ["client"] });
   if (!role.ok) return role;
+  if ((args.answers ?? []).some((a) => hasControlChars(a.question, "multiline") || hasControlChars(a.answer, "multiline"))) {
+    return { ok: false, error: "control_characters" };
+  }
   const now = args.now ?? new Date();
   const [p] = await db.select({ brief: projects.brief, budget: projects.budget, isDemo: projects.isDemo }).from(projects).where(eq(projects.id, args.projectId));
   const input: CompileInput = { brief: p!.brief, budgetCents: moneyToCents(p!.budget), answers: args.answers ?? [] };

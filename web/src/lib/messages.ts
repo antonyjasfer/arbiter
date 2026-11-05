@@ -1,6 +1,7 @@
 // Plain-language text for every error code the server returns. Shown inline next to the action.
 export const ERROR_TEXT: Record<string, string> = {
   invalid_input: "Check the title, brief (40 to 4,000 characters) and budget ($50 to $5,000).",
+  control_characters: "Remove hidden control characters (often pasted in with the text) from the title, brief or answers.",
   not_member: "This project isn't available to you.",
   not_found: "This project isn't available to you.",
   forbidden: "Only the client can do that.",
@@ -24,6 +25,8 @@ export const PROBLEM_TEXT: Record<string, string> = {
   too_many_milestones: "Use 1 to 6 milestones.",
   empty_criteria: "Each milestone needs 1 to 8 acceptance criteria.",
   duplicate_title: "Each milestone needs its own title.",
+  invalid_keys: "The agreement's milestone or criterion IDs don't match the version you edited. Reload the page and edit again.",
+  control_characters: "Remove hidden control characters (often pasted in with the text) from the titles and criteria.",
   invalid_shape: "Something in the agreement is out of range (titles up to 120 characters, criteria up to 500, due within 90 days, at most $5,000 a milestone).",
 };
 

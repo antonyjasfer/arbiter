@@ -9,7 +9,7 @@ import { z } from "zod";
 import { dollarsToCents } from "@/lib/format";
 import { parseId } from "@/lib/ids";
 import { getAi } from "@/server/ai/default-ai";
-import { agreementBodySchema } from "@/server/agreements/body";
+import { agreementBodyInputSchema } from "@/server/agreements/body";
 import type { CheckProblem } from "@/server/agreements/compiler";
 import { resumeDueJobs, retryJobNow, runJob, startCompile } from "@/server/agreements/compile-jobs";
 import { approve, createManualVersion, saveEdit } from "@/server/agreements/versions";
@@ -60,7 +60,7 @@ export async function saveEditAction(projectId: string, expectedHash: string, bo
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   if (!parseId(projectId)) return { ok: false, error: "not_found" };
-  const parsed = agreementBodySchema.safeParse(body);
+  const parsed = agreementBodyInputSchema.safeParse(body);
   if (!parsed.success) return { ok: false, error: "invalid_body", problems: [{ code: "invalid_shape" }] };
   const r = await saveEdit(getDb(), { userId: user.value.userId, projectId, expectedHash: String(expectedHash), body: parsed.data });
   if (!r.ok) return { ok: false, error: r.error.code, problems: r.error.code === "invalid_body" ? r.error.problems : undefined };
@@ -72,7 +72,7 @@ export async function createManualVersionAction(projectId: string, body: unknown
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   if (!parseId(projectId)) return { ok: false, error: "not_found" };
-  const parsed = agreementBodySchema.safeParse(body);
+  const parsed = agreementBodyInputSchema.safeParse(body);
   if (!parsed.success) return { ok: false, error: "invalid_body", problems: [{ code: "invalid_shape" }] };
   const r = await createManualVersion(getDb(), { userId: user.value.userId, projectId, body: parsed.data });
   if (!r.ok) return { ok: false, error: r.error.code, problems: r.error.code === "invalid_body" ? r.error.problems : undefined };

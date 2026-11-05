@@ -6,7 +6,7 @@ import * as s from "../db/schema";
 import { verifyChain } from "../audit/audit";
 import { createProject } from "../projects/projects";
 import { acceptInvite, createInvite } from "../projects/invitations";
-import type { AgreementBody } from "./body";
+import type { AgreementBody, AgreementBodyInput } from "./body";
 import { checkCompilerOutput } from "./compiler";
 import { applyCompileResult, approve, createManualVersion, getCurrentVersion, saveEdit } from "./versions";
 
@@ -120,13 +120,26 @@ describe("saveEdit", () => {
   it("keeps the AI's draft untouched: editing an AI version creates a new version", async () => {
     const v1 = await current();
     const body = structuredClone(v1.body);
-    body.milestones[0]!.criteria.push({ key: "m1c3", kind: "review", text: "The layout is easy to use.", needsHumanJudgment: true });
+    (body as AgreementBodyInput).milestones[0]!.criteria.push({ kind: "review", text: "The layout is easy to use." }); // new: no key
     expect(await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body })).toMatchObject({ ok: true, value: { version: 2 } });
     const v2 = await current();
     expect(v2).toMatchObject({ version: 2, source: "manual" });
     expect(v2.body.milestones[0]!.criteria.at(-1)).toMatchObject({ kind: "review", needsHumanJudgment: true });
     const [orig] = await db().select().from(s.agreementVersions).where(eq(s.agreementVersions.hash, v1.hash));
     expect(orig).toMatchObject({ version: 1, source: "ai" });
+  });
+
+  it("keeps keys stable across a saved edit and refuses invented keys", async () => {
+    const v1 = await current();
+    const body = structuredClone(v1.body) as AgreementBodyInput;
+    body.milestones[0]!.criteria.push({ kind: "review", text: "Easy to use on a phone." }); // no key: server assigns
+    const r = await saveEdit(db(), { userId: client, projectId, expectedHash: v1.hash, body });
+    expect(r.ok).toBe(true);
+    const v2 = await current();
+    expect(v2.body.milestones[0]!.criteria.map((c) => c.key)).toEqual(["m1c1", "m1c2", "m1c3"]);
+    const bad = structuredClone(v2.body) as AgreementBodyInput;
+    bad.milestones[0]!.criteria[0]!.key = "m1c7";
+    expect(await saveEdit(db(), { userId: client, projectId, expectedHash: v2.hash, body: bad })).toEqual({ ok: false, error: { code: "invalid_body", problems: [{ code: "invalid_keys" }] } });
   });
 
   it("edits an unapproved hand-written version in place", async () => {

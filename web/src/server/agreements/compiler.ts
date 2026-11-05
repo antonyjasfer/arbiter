@@ -3,8 +3,9 @@
 // parties' approvals decide.
 import { z } from "zod";
 import type { Result } from "@/lib/result";
+import { hasControlChars } from "@/lib/text";
 import type { AiRequest } from "../ai/structured-ai";
-import { agreementBodySchema, CRITERION_KINDS, MAX_CRITERIA, MAX_MILESTONES, MIN_MILESTONE_CENTS, type AgreementBody } from "./body";
+import { agreementBodyInputSchema, CRITERION_KINDS, MAX_CRITERIA, MAX_MILESTONES, MIN_MILESTONE_CENTS, type AgreementBody, type AgreementBodyInput } from "./body";
 
 export const compilerOutputSchema = z.object({
   milestones: z
@@ -25,7 +26,7 @@ export type CompilerOutput = z.infer<typeof compilerOutputSchema>;
 export type CompileInput = { brief: string; budgetCents: number; answers: { question: string; answer: string }[] };
 
 export type CheckProblem =
-  | { code: "sum_mismatch" | "too_many_milestones" | "invalid_shape" }
+  | { code: "sum_mismatch" | "too_many_milestones" | "invalid_shape" | "invalid_keys" | "control_characters" }
   | { code: "below_minimum" | "empty_criteria" | "duplicate_title"; milestone: string };
 
 export const SCHEMA_NAME = "ArbiterAgreementV1";
@@ -80,14 +81,52 @@ export function draftBody(out: CompilerOutput): AgreementBody {
   };
 }
 
-/** The same rules for model output and for the client's hand edits. */
-export function checkBody(body: AgreementBody, budgetCents: number): Result<AgreementBody, CheckProblem[]> {
-  const parsed = agreementBodySchema.safeParse(body);
+const keyNumber = (key: string) => Number(/(\d+)$/.exec(key)![1]);
+const maxOf = (nums: number[]) => nums.reduce((a, b) => Math.max(a, b), 0);
+
+/**
+ * Gives every milestone and criterion a key. Keys the input already carries are kept as they are; new
+ * items get the next free number, counting keys in both this body and the previous version, so a key is
+ * never reused. Returns null for duplicate keys, a criterion key whose prefix is not its milestone's, or
+ * (when there is a previous version) a key that version never had, since keys can't be renamed or invented.
+ */
+function assignKeys(input: z.output<typeof agreementBodyInputSchema>, previous?: AgreementBody): AgreementBody | null {
+  const prevMilestones = new Set(previous?.milestones.map((m) => m.key) ?? []);
+  const prevCriteria = new Set(previous?.milestones.flatMap((m) => m.criteria.map((c) => c.key)) ?? []);
+  const given = input.milestones.flatMap((m) => (m.key ? [m.key] : []));
+  if (new Set(given).size !== given.length) return null;
+  if (previous && given.some((k) => !prevMilestones.has(k))) return null;
+  let nextMilestone = maxOf([...given, ...prevMilestones].map(keyNumber)) + 1;
+  const seenCriteria = new Set<string>();
+  const milestones: AgreementBody["milestones"] = [];
+  for (const m of input.milestones) {
+    const key = m.key ?? `m${nextMilestone++}`;
+    const givenC = m.criteria.flatMap((c) => (c.key ? [c.key] : []));
+    for (const ck of givenC) {
+      if (!ck.startsWith(`${key}c`) || seenCriteria.has(ck) || (previous && !prevCriteria.has(ck))) return null;
+      seenCriteria.add(ck);
+    }
+    const ownPrev = [...prevCriteria].filter((ck) => ck.startsWith(`${key}c`));
+    let nextCriterion = maxOf([...givenC, ...ownPrev].map(keyNumber)) + 1;
+    milestones.push({
+      key,
+      title: m.title,
+      amountCents: m.amountCents,
+      dueInDays: m.dueInDays,
+      criteria: m.criteria.map((c) => ({ key: c.key ?? `${key}c${nextCriterion++}`, kind: c.kind, text: c.text, needsHumanJudgment: c.kind === "review" })),
+    });
+  }
+  return { milestones, questions: input.questions };
+}
+
+/** The same rules for model output and for the client's hand edits. `previous` is the version being edited. */
+export function checkBody(body: AgreementBodyInput, budgetCents: number, previous?: AgreementBody): Result<AgreementBody, CheckProblem[]> {
+  const parsed = agreementBodyInputSchema.safeParse(body);
   if (!parsed.success) return { ok: false, error: [{ code: "invalid_shape" }] };
-  const b: AgreementBody = {
-    ...parsed.data,
-    milestones: parsed.data.milestones.map((m) => ({ ...m, criteria: m.criteria.map((c) => ({ ...c, needsHumanJudgment: c.kind === "review" })) })),
-  };
+  const texts = parsed.data.milestones.flatMap((m) => [{ t: m.title, k: "line" as const }, ...m.criteria.map((c) => ({ t: c.text, k: "multiline" as const }))]);
+  if (texts.some(({ t, k }) => hasControlChars(t, k))) return { ok: false, error: [{ code: "control_characters" }] };
+  const b = assignKeys(parsed.data, previous);
+  if (!b) return { ok: false, error: [{ code: "invalid_keys" }] };
   const problems: CheckProblem[] = [];
   if (b.milestones.length === 0 || b.milestones.length > MAX_MILESTONES) problems.push({ code: "too_many_milestones" });
   const seen = new Set<string>();

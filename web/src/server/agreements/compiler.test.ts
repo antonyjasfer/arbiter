@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgreementBody } from "./body";
+import type { AgreementBody, AgreementBodyInput } from "./body";
 import { buildCompileRequest, checkBody, checkCompilerOutput, compilerOutputSchema, type CompilerOutput } from "./compiler";
 
 const twoMilestones: CompilerOutput = {
@@ -92,6 +92,46 @@ describe("checkBody (hand edits)", () => {
     return structuredClone(r.value);
   };
 
+  it("keeps existing keys and gives new items the next free key", () => {
+    const previous = body();
+    const edited = structuredClone(previous) as AgreementBodyInput;
+    edited.milestones[0]!.criteria.splice(0, 1); // remove m1c1
+    edited.milestones[0]!.criteria.push({ kind: "review", text: "Easy to use.", needsHumanJudgment: true }); // new, no key
+    edited.milestones.push({ title: "Polish", amountCents: 5000, dueInDays: 30, criteria: [{ kind: "test", text: "npm test passes." }] }); // new, no key
+    edited.milestones[1]!.amountCents = 10000;
+    const r = checkBody(edited, 30000, previous);
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    expect(r.value.milestones.map((m) => m.key)).toEqual(["m1", "m2", "m3"]);
+    expect(r.value.milestones[0]!.criteria.map((c) => c.key)).toEqual(["m1c2", "m1c3", "m1c4"]); // m1c1 is never reused
+    expect(r.value.milestones[2]!.criteria.map((c) => c.key)).toEqual(["m3c1"]);
+  });
+
+  it("never reuses the key of a milestone that was removed", () => {
+    const previous = body();
+    const edited = structuredClone(previous) as AgreementBodyInput;
+    edited.milestones.pop(); // remove m2
+    edited.milestones[0]!.amountCents = 15000;
+    edited.milestones.push({ title: "Replacement", amountCents: 15000, dueInDays: 20, criteria: [{ kind: "static", text: "A README exists." }] });
+    const r = checkBody(edited, 30000, previous);
+    expect(r.ok && r.value.milestones.map((m) => m.key)).toEqual(["m1", "m3"]);
+  });
+
+  it("rejects duplicate keys and keys the previous version never had", () => {
+    const previous = body();
+    const dup = structuredClone(previous) as AgreementBodyInput;
+    dup.milestones[1]!.criteria[0]!.key = "m1c1";
+    expect(checkBody(dup, 30000, previous)).toEqual({ ok: false, error: [{ code: "invalid_keys" }] });
+    const dupMilestone = structuredClone(previous) as AgreementBodyInput;
+    dupMilestone.milestones[1]!.key = "m1";
+    expect(checkBody(dupMilestone, 30000, previous)).toEqual({ ok: false, error: [{ code: "invalid_keys" }] });
+    const invented = structuredClone(previous) as AgreementBodyInput;
+    invented.milestones[1]!.key = "m9";
+    expect(checkBody(invented, 30000, previous)).toEqual({ ok: false, error: [{ code: "invalid_keys" }] });
+    const wrongParent = structuredClone(previous) as AgreementBodyInput;
+    wrongParent.milestones[1]!.criteria[0]!.key = "m2c9";
+    expect(checkBody(wrongParent, 30000, previous)).toEqual({ ok: false, error: [{ code: "invalid_keys" }] });
+  });
+
   it("accepts the compiler's own body", () => {
     expect(checkBody(body(), 30000)).toEqual({ ok: true, value: body() });
   });
@@ -112,8 +152,23 @@ describe("checkBody (hand edits)", () => {
 
   it("reports more than 6 milestones", () => {
     const b = body();
-    b.milestones = Array.from({ length: 7 }, (_, i) => ({ ...b.milestones[1]!, key: `m${i + 1}`, title: `M${i}`, amountCents: 5000 }));
+    b.milestones = Array.from({ length: 7 }, (_, i) => ({
+      ...b.milestones[1]!,
+      key: `m${i + 1}`,
+      title: `M${i}`,
+      amountCents: 5000,
+      criteria: [{ key: `m${i + 1}c1`, kind: "test" as const, text: "npm test passes.", needsHumanJudgment: false }],
+    }));
     expect(checkBody(b, 35000)).toMatchObject({ ok: false, error: [{ code: "too_many_milestones" }] });
+  });
+
+  it("rejects control characters in milestone titles and criteria", () => {
+    const t = body();
+    t.milestones[0]!.title = "Working\u0000app";
+    expect(checkBody(t, 30000)).toEqual({ ok: false, error: [{ code: "control_characters" }] });
+    const c = body();
+    c.milestones[0]!.criteria[0]!.text = "Shows \u001b[31mred";
+    expect(checkBody(c, 30000)).toEqual({ ok: false, error: [{ code: "control_characters" }] });
   });
 
   it("rejects a body of the wrong shape", () => {

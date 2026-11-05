@@ -188,6 +188,13 @@ describe("retryJobNow", () => {
   });
 });
 
+describe("startCompile answers", () => {
+  it("rejects answers containing control characters", async () => {
+    const r = await startCompile(db(), { userId: client, projectId, now: T0, model: "fake-model", answers: [{ question: "Pay online?", answer: "No\u0000" }] });
+    expect(r).toEqual({ ok: false, error: "control_characters" });
+  });
+});
+
 describe("startCompile guards", () => {
   it("allows one active job per project and only the client may start one", async () => {
     await start();
