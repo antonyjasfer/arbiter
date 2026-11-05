@@ -32,6 +32,8 @@
 - **Lost authorization:** an expired or voided authorization in FUNDED moves to AGREED via `authorization_lost`. In SUBMITTED, VERIFYING, REPORT_READY or DISPUTED, the milestone keeps its state; the payment is marked `authorization_lost` and the UI shows "Re-fund needed". Approval is blocked until a new authorization supersedes the lost one.
 - **Reauthorize:** a 422 inside the honor period means "not needed", not an error.
 - **No paid cron:** reconciling happens on webhook, page view and poll.
+- **Local end-to-end (user, 5 Nov):** `main` doesn't have Phase 5 yet, so the Task 8 payment runs **locally** (`next dev` on port 3001) against the PayPal sandbox. PayPal can't deliver webhooks to localhost, so reconcile-on-poll does all the state moves there. That run also proves the lost-webhook path.
+- **The test-only path to REPORT_READY** is a local CLI script, `web/scripts/dev-report-ready.ts`, that uses the DB directly through guarded `transitionMilestone` calls (SUBMITTED→VERIFYING→REPORT_READY with a fixture submission). It is **never** an HTTP route or server action, it refuses to run unless `PAYPAL_ENVIRONMENT=SANDBOX` and it gets an explicit milestone ID, and it audits what it did. Phase 6 deletes it.
 - **Honest copy:** a pending capture says "PayPal is settling this payment; Arbiter pays the freelancer once it completes."
 - **No file outside the owned list is edited** without telling the user. No migrations.
 
@@ -51,6 +53,7 @@
 - **App:** `web/src/app/(app)/projects/payment-actions.ts`; `web/src/app/api/payments/[paymentId]/route.ts` (reconcile on poll); `web/src/app/(app)/settings/page.tsx` (the freelancer's sandbox PayPal email).
 - **UI:** `web/src/components/payments/*`, including filling in `milestone-payment.tsx` (the v6 buttons, the timeline and the fee breakdown), and `web/src/lib/messages-payments.ts`.
 - **Spikes:** `spikes/03-webhook/register-webhook.ts` and its test (adding the DENIED, REVERSED and REFUNDED subscriptions).
+- **Test-only script:** `web/scripts/dev-report-ready.ts` (deleted in Phase 6).
 - **Docs:** `README.md`'s "Payments" section only, which is new; Phase 4 doesn't touch the README. `spikes/FINDINGS.md` only in the "Phase 5 live checks" section.
 
 **Shared with Phase 4:** none. Phase 4 doesn't touch `server/paypal/*`.
@@ -147,18 +150,25 @@
 
 ### Task 8: End-to-end sandbox payment by 7 Nov, review, handoff
 
-- [ ] **By 7 Nov IST:** one real sandbox flow on the live site. Fund (the user approves as the sandbox buyer) → approve, using a test-only path to REPORT_READY until Phase 6 connects Phase 4 → capture → payout to `PAYPAL_FREELANCER_EMAIL`. The capture may sit PENDING for days (FINDINGS), which is why this runs early. Record the IDs and timings in FINDINGS "Phase 5 live checks".
+- [ ] **By end of 7 Nov IST:** one real sandbox flow, run **locally** on port 3001 against the sandbox (`main` has no Phase 5 yet):
+  1. fund (the user approves in the PayPal popup as the sandbox buyer; Claude never types the buyer's credentials);
+  2. `dev-report-ready.ts` moves the milestone to REPORT_READY;
+  3. the client approves → capture → payout to `PAYPAL_FREELANCER_EMAIL`.
+
+  No webhooks reach localhost, so every state move after funding comes from reconcile-on-poll, which also proves the lost-webhook path (Review Focus 5). The capture may sit PENDING for days (FINDINGS), which is why this runs early. Record the IDs, timings and "moved by poll, no webhook" in FINDINGS "Phase 5 live checks". The real flow on the live site follows in Phase 6.
 - [ ] **Review:** a fresh-subagent security review of `server/payments/*`, using the Review Focus list; fix Important and above test-first.
-- [ ] **README "Payments" section:** the sandbox buyer login for judges (the email and password of a sandbox personal account, which is a test credential), the honest limits (29-day authorization, 3-day honor period, PENDING captures, not an escrow service, platform approval needed in production).
+- [ ] **README "Payments" section:** the honest limits (29-day authorization, 3-day honor period, PENDING captures, not an escrow service, platform approval needed in production).
+- [ ] **Last, after everything else:** add the judge sandbox buyer login (a dedicated US sandbox personal account the user created; a test credential) to the README "Payments" section. The user provides the email and password at that point; ask for them then, and don't write placeholders that look real before that.
 - [ ] **Handoff:** don't merge to `main` alone. Hand to Phase 6. Run the secret scan before every push.
 
 ## Render and PayPal settings the user adds
 
 - On Render `arbiter`: `PAYPAL_FREELANCER_EMAIL` (the sandbox personal account that receives payouts). `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_WEBHOOK_ID` are already set.
-- **Recommended:** a dedicated "judge" sandbox personal account, separate from the one used in development. It goes in the README, and its balance and history won't mix with your test data.
+- `PAYPAL_FREELANCER_EMAIL` is set on Render (user, 5 Nov).
+- **Judge account:** created by the user (a US sandbox personal account). Its login goes in the README at the end of Task 8.
 
 ## What Phase 6 must connect
 
 - **Guard input:** `checkRelease`'s latest-verdicts input is replaced with Phase 4's `latestVerdicts(milestoneId)`.
 - **Approval trigger:** the approve button appears on Phase 4's report page (REPORT_READY); the Disagree flow leads to DISPUTED and then to approve or cancel.
-- **Removing the test-only paths:** Phase 5's test path to REPORT_READY is removed, and the full flow runs on the demo: fund → submit → verify → approve → capture → payout.
+- **Removing the test-only paths:** delete `web/scripts/dev-report-ready.ts` (Phase 5) and `web/scripts/dev-fund-milestone.ts` (Phase 4), and the full flow runs on the demo: fund → submit → verify → approve → capture → payout.
