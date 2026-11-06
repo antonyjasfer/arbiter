@@ -8,11 +8,20 @@ import { parseId } from "@/lib/ids";
 import { requireUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
 import { getPaypalApi } from "@/server/payments/default-api";
+import { livePayment, loadMilestone } from "@/server/payments/context";
 import { completeFunding, startFunding } from "@/server/payments/funding";
 import { setPaypalEmail } from "@/server/payments/payee";
+import { approveRelease, sendPayout } from "@/server/payments/release";
+import { latestRunVerdicts } from "@/server/payments/verdicts";
 import type { ActionResult } from "./actions";
 
 const orderIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,64}$/);
+// The guard enforces the 20-character minimum; this only bounds the size and drops an empty reason.
+const overrideSchema = z
+  .string()
+  .max(2000)
+  .transform((s) => s.trim() || undefined)
+  .optional();
 
 export async function startFundingAction(projectId: string, milestoneId: string): Promise<ActionResult<{ orderId: string }>> {
   const user = await requireUser();
@@ -32,6 +41,29 @@ export async function completeFundingAction(projectId: string, milestoneId: stri
   revalidatePath(`/projects/${projectId}`);
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, value: { state: r.value.state } };
+}
+
+/**
+ * The client approves the release: guard, capture, and (if the capture completed) the payout. A PENDING
+ * capture or a payout that didn't start is finished by the poll route (reconcilePayment).
+ */
+export async function approveReleaseAction(projectId: string, milestoneId: string, overrideReason: string | null): Promise<ActionResult<{ state: string }>> {
+  const user = await requireUser();
+  if (!user.ok) return { ok: false, error: "unauthenticated" };
+  if (!parseId(String(projectId)) || !parseId(String(milestoneId))) return { ok: false, error: "not_found" };
+  const reason = overrideSchema.safeParse(overrideReason ?? undefined);
+  if (!reason.success) return { ok: false, error: "override_too_short" };
+  const db = getDb();
+  const api = getPaypalApi();
+  const r = await approveRelease(db, api, { userId: user.value.userId, milestoneId, overrideReason: reason.data, latestVerdicts: latestRunVerdicts(db) });
+  if (r.ok && r.value.state === "RELEASED") {
+    const p = await livePayment(db, milestoneId);
+    if (p) await sendPayout(db, api, p.id);
+  }
+  revalidatePath(`/projects/${projectId}`);
+  if (!r.ok) return { ok: false, error: r.error };
+  const m = await loadMilestone(db, milestoneId);
+  return { ok: true, value: { state: m?.state ?? r.value.state } };
 }
 
 export async function setPaypalEmailAction(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {

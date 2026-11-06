@@ -14,4 +14,16 @@ export const PAYMENT_ERROR_TEXT: Record<string, string> = {
   paypal_cancelled: "You closed PayPal before approving. Nothing was charged.",
   invalid_email: "Enter a valid email address (up to 254 characters).",
   demo_locked: "Demo accounts use a seeded sandbox email, so it can't be changed.",
+  // Release (the payment guard and capture/payout).
+  not_releasable: "This milestone can't be released now. Reload the page to see its current state.",
+  not_funded: "This milestone isn't funded, so there's nothing to release.",
+  refund_needed: "PayPal's hold on this milestone has expired or was voided. Fund it again before approving.",
+  amount_exceeds_milestone: "The payment amount doesn't match the milestone. Nothing was captured; contact support.",
+  payee_changed: "The freelancer's PayPal email changed after funding. Nothing was captured or paid; contact support.",
+  approver_not_client: "Only the project's client can approve a release.",
+  no_report: "There's no finished verification report for this milestone yet.",
+  fail_without_override: "A check failed. To release anyway, write why (at least 20 characters).",
+  override_too_short: "Write at least 20 characters explaining why you're releasing despite the failed check.",
+  capture_not_completed: "PayPal hasn't finished settling the payment, so the freelancer can't be paid yet.",
+  payout_failed: "PayPal couldn't pay the freelancer. Arbiter doesn't retry this automatically; contact support.",
 };
