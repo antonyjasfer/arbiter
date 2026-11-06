@@ -22,6 +22,7 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
   let nextCaptureStatus = "COMPLETED";
   let nextCaptureReason: string | null = null;
   let nextPayoutItemStatus = "SUCCESS";
+  let nextCaptureAmount: number | null = null;
 
   function replay<T>(op: string, requestId: string, run: () => T): T {
     calls.push({ op, requestId });
@@ -86,7 +87,8 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
         if (a.status !== "CREATED") throw new PaypalApiError(422, "AUTHORIZATION_VOIDED");
         if (args.amountCents > a.amountCents) throw new PaypalApiError(422, "MAX_CAPTURE_AMOUNT_EXCEEDED");
         a.status = "CAPTURED";
-        const c: PaypalCapture = { id: nextId("CAP"), status: nextCaptureStatus, statusReason: nextCaptureReason, amountCents: args.amountCents, currency: "USD" };
+        const c: PaypalCapture = { id: nextId("CAP"), status: nextCaptureStatus, statusReason: nextCaptureReason, amountCents: nextCaptureAmount ?? args.amountCents, currency: "USD" };
+        nextCaptureAmount = null;
         captures.set(c.id, { ...c, authorizationId });
         return c;
       });
@@ -148,6 +150,17 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
       if (!b) throw new Error("fake: no such batch");
       b.items = b.items.map((i) => ({ ...i, status }));
       b.batchStatus = status === "SUCCESS" ? "SUCCESS" : b.batchStatus;
+    },
+    /** A batch read back with no items yet (PayPal can return the header before the items). */
+    setPayoutBatchOnly(batchId: string, batchStatus: string) {
+      const b = batches.get(batchId);
+      if (!b) throw new Error("fake: no such batch");
+      b.items = [];
+      b.batchStatus = batchStatus;
+    },
+    /** The next new capture reports this amount (to test a mismatched read-back). */
+    setNextCaptureAmount(cents: number) {
+      nextCaptureAmount = cents;
     },
     /** The next call of `op` fails with `error` (for timeouts and outages). */
     failNext(op: string, error: Error) {

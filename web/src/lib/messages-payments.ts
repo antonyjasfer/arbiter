@@ -26,4 +26,5 @@ export const PAYMENT_ERROR_TEXT: Record<string, string> = {
   override_too_short: "Write at least 20 characters explaining why you're releasing despite the failed check.",
   capture_not_completed: "PayPal hasn't finished settling the payment, so the freelancer can't be paid yet.",
   payout_failed: "PayPal couldn't pay the freelancer. Arbiter doesn't retry this automatically; contact support.",
+  payout_unknown: "PayPal didn't confirm whether the freelancer was paid. Arbiter won't send it again; support checks PayPal first.",
 };

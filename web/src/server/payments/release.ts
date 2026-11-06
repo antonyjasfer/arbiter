@@ -23,15 +23,31 @@ import { PaypalApiError, type PaypalApi, type PaypalCapture } from "./paypal-api
 import { ensureRequestId } from "./request-ids";
 
 type PaypalFailure = "paypal_refused" | "paypal_unavailable";
-export type ReleaseError = GuardError | PaypalFailure | "conflict";
-export type PayoutError = PayoutGuardError | PaypalFailure | "payout_failed" | "conflict";
+export type ReleaseError = GuardError | PaypalFailure | "amount_mismatch" | "conflict";
+export type PayoutError = PayoutGuardError | PaypalFailure | "payout_failed" | "payout_unknown" | "conflict";
 type StateResult<E> = Result<{ state: MilestoneState }, E>;
 
-const FAILED_PAYOUT = new Set(["FAILED", "RETURNED", "BLOCKED", "REFUNDED", "REVERSED"]);
+// Item statuses that end a payout without paying, plus batch statuses (DENIED, CANCELED) for a batch read
+// back with no items.
+const FAILED_PAYOUT = new Set(["FAILED", "RETURNED", "BLOCKED", "REFUNDED", "REVERSED", "DENIED", "CANCELED"]);
+/** Payout row statuses that polling never retries: a human decides. */
+export const PAYOUT_STOPPED = new Set(["payout_failed", "payout_unknown"]);
 const LOST_RACE = "lost_race";
 
 function paypalFailure(e: unknown): PaypalFailure {
   return e instanceof PaypalApiError && e.status < 500 ? "paypal_refused" : "paypal_unavailable";
+}
+
+/**
+ * How a create-payout error is handled. Temporary (retry later): network errors, 5xx, 429, 409 and
+ * INSUFFICIENT_FUNDS (a fresh capture may not be spendable yet in sandbox). Unknown (PayPal may already
+ * have paid; a human checks the dashboard): any duplicate answer, or a bare USER_BUSINESS_ERROR, which is
+ * also how a reused sender_batch_id comes back. Anything else is a permanent refusal.
+ */
+function payoutFailure(e: unknown): "temporary" | "unknown" | "refused" {
+  if (!(e instanceof PaypalApiError) || e.status >= 500 || e.status === 429 || e.status === 409 || e.issue === "INSUFFICIENT_FUNDS") return "temporary";
+  if (/DUPLICATE/.test(e.issue) || e.issue === "USER_BUSINESS_ERROR") return "unknown";
+  return "refused";
 }
 
 async function paymentById(db: Db, paymentId: string): Promise<PaymentRow | null> {
@@ -151,6 +167,10 @@ async function applyCapture(db: Db, paymentId: string, cap: PaypalCapture): Prom
     const m = p && (await loadMilestone(db, p.milestoneId));
     if (!p || !m) return { ok: false, error: "not_found" };
     if (p.captureId && p.captureId !== cap.id) return { ok: false, error: "conflict" };
+    // A capture PayPal reports for another amount or currency never releases; a human looks at it.
+    if ((cap.amountCents !== null && cap.amountCents !== moneyToCents(p.amount)) || (cap.currency !== null && cap.currency !== "USD")) {
+      return { ok: false, error: "amount_mismatch" };
+    }
     const changed = p.captureId !== cap.id || p.captureStatus !== cap.status;
     const event = captureEvent(m.state, cap.status);
     if (!changed && !event) {
@@ -205,7 +225,7 @@ export async function sendPayout(db: Db, api: PaypalApi, paymentId: string): Pro
   const p = await paymentById(db, paymentId);
   if (!p) return { ok: false, error: "not_found" };
   if (p.payoutBatchId) return reconcilePayout(db, api, p.id);
-  if (p.status === "payout_failed") return { ok: false, error: "payout_failed" };
+  if (p.status === "payout_failed" || p.status === "payout_unknown") return { ok: false, error: p.status };
   if (!p.captureId) return { ok: false, error: "capture_not_completed" };
   let captureStatus: string;
   try {
@@ -229,9 +249,15 @@ export async function sendPayout(db: Db, api: PaypalApi, paymentId: string): Pro
       note: "Arbiter milestone payout (PayPal sandbox)",
     });
   } catch (e) {
-    const failure = paypalFailure(e);
-    if (failure === "paypal_refused") await markPayoutFailed(db, p.id, `REFUSED:${(e as PaypalApiError).issue}`);
-    return { ok: false, error: failure };
+    const kind = payoutFailure(e);
+    if (kind === "temporary") return { ok: false, error: "paypal_unavailable" };
+    const issue = (e as PaypalApiError).issue;
+    if (kind === "unknown") {
+      await markPayoutStopped(db, p.id, "payout_unknown", `UNKNOWN:${issue}`);
+      return { ok: false, error: "payout_unknown" };
+    }
+    await markPayoutStopped(db, p.id, "payout_failed", `REFUSED:${issue}`);
+    return { ok: false, error: "paypal_refused" };
   }
 
   await db.transaction(async (tx) => {
@@ -247,18 +273,21 @@ export async function sendPayout(db: Db, api: PaypalApi, paymentId: string): Pro
   return reconcilePayout(db, api, p.id);
 }
 
-async function markPayoutFailed(db: Db, paymentId: string, payoutStatus: string): Promise<void> {
+/** Stop the payout for a human: refused (failed) or outcome unknown. Never overwrites a stored batch. */
+async function markPayoutStopped(db: Db, paymentId: string, status: "payout_failed" | "payout_unknown", payoutStatus: string): Promise<void> {
   const p = await paymentById(db, paymentId);
   const m = p && (await loadMilestone(db, p.milestoneId));
-  if (!p || !m || p.status === "payout_failed") return;
+  if (!p || !m || PAYOUT_STOPPED.has(p.status)) return;
   await db.transaction(async (tx) => {
     const rows = await tx
       .update(payments)
-      .set({ status: "payout_failed", payoutStatus, ...bump() })
-      .where(and(eq(payments.id, p.id), eq(payments.stateVersion, p.stateVersion)))
+      .set({ status, payoutStatus, ...bump() })
+      .where(and(eq(payments.id, p.id), eq(payments.stateVersion, p.stateVersion), isNull(payments.payoutBatchId)))
       .returning({ id: payments.id });
     if (rows.length === 0) return;
-    await appendAudit(tx, { projectId: m.projectId, actorId: null, action: "payout_failed", data: { milestoneId: m.id, paymentId: p.id, status: payoutStatus } });
+    const data = { milestoneId: m.id, paymentId: p.id, status: payoutStatus };
+    // An unknown outcome is audited as a sent payout request whose result PayPal didn't confirm.
+    await appendAudit(tx, { projectId: m.projectId, actorId: null, action: status === "payout_failed" ? "payout_failed" : "payout_sent", data: status === "payout_failed" ? data : { ...data, outcome: "unknown" } });
   });
 }
 
@@ -272,7 +301,9 @@ export async function reconcilePayout(db: Db, api: PaypalApi, paymentId: string)
   let item: { itemId: string | null; status: string };
   try {
     const b = await api.getPayoutBatch(first.payoutBatchId);
-    item = { itemId: b.items[0]?.itemId ?? null, status: b.items[0]?.status ?? b.batchStatus };
+    // Without an item, only the batch status is known: it can fail the payout but never mark it paid.
+    const i = b.items[0];
+    item = i ? { itemId: i.itemId, status: i.status ?? b.batchStatus } : { itemId: null, status: b.batchStatus };
   } catch (e) {
     return { ok: false, error: paypalFailure(e) };
   }
@@ -282,13 +313,14 @@ export async function reconcilePayout(db: Db, api: PaypalApi, paymentId: string)
     const m = p && (await loadMilestone(db, p.milestoneId));
     if (!p || !m) return { ok: false, error: "not_found" };
     const changed = p.payoutItemId !== item.itemId || p.payoutStatus !== item.status;
-    const event: MilestoneEvent | null = item.status === "SUCCESS" && m.state === "RELEASED" ? "payout_succeeded" : null;
+    const paid = item.status === "SUCCESS" && item.itemId !== null;
+    const event: MilestoneEvent | null = paid && m.state === "RELEASED" ? "payout_succeeded" : null;
     if (!changed && !event) {
       await db.update(payments).set({ lastReconciledAt: new Date() }).where(eq(payments.id, p.id));
       return { ok: true, value: { state: m.state } };
     }
     const failed = FAILED_PAYOUT.has(item.status);
-    const status = item.status === "SUCCESS" ? "paid" : failed ? "payout_failed" : "payout_pending";
+    const status = paid ? "paid" : failed ? "payout_failed" : "payout_pending";
     return db.transaction(async (tx) => {
       const rows = await tx
         .update(payments)

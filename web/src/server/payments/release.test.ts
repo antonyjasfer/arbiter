@@ -92,6 +92,12 @@ describe("approveRelease", () => {
     expect(await approve({ latestVerdicts: oneFail })).toEqual({ ok: true, value: { state: "RELEASED" } });
   });
 
+  it("a capture whose amount differs from the payment does not release", async () => {
+    pp.setNextCaptureAmount(4000);
+    expect(await approve()).toEqual({ ok: false, error: "amount_mismatch" });
+    expect(await state()).toBe("APPROVED");
+  });
+
   it("a 4xx capture refusal is reported and leaves the milestone APPROVED", async () => {
     pp.failNext("captureAuthorization", new PaypalApiError(422, "AUTHORIZATION_EXPIRED"));
     expect(await approve()).toEqual({ ok: false, error: "paypal_refused" });
@@ -172,6 +178,59 @@ describe("sendPayout and reconcilePayout", () => {
     expect(await live()).toMatchObject({ status: "payout_failed", payoutStatus: "FAILED" });
     expect((await auditActions(db(), f.projectId)).filter((x) => x === "payout_failed")).toHaveLength(1);
     expect(pp.count("createPayout")).toBe(1);
+  });
+
+  it("a 429 or 409 on create-payout is temporary: nothing is marked failed and the retry pays once", async () => {
+    await approve();
+    const p = await live();
+    for (const status of [429, 409]) {
+      pp.failNext("createPayout", new PaypalApiError(status, "RATE_LIMIT_REACHED"));
+      expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: false, error: "paypal_unavailable" });
+      expect((await live()).status).not.toBe("payout_failed");
+    }
+    expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: true, value: { state: "PAID" } });
+    expect(pp.batches.size).toBe(1);
+    expect(await auditActions(db(), f.projectId)).not.toContain("payout_failed");
+  });
+
+  it("a duplicate-batch answer means PayPal may already have paid: flagged for a human, not 'failed'", async () => {
+    await approve();
+    const p = await live();
+    pp.failNext("createPayout", new PaypalApiError(400, "DUPLICATE_REQUEST_ID"));
+    expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: false, error: "payout_unknown" });
+    expect(await live()).toMatchObject({ status: "payout_unknown" });
+    expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: false, error: "payout_unknown" });
+    expect(pp.count("createPayout")).toBe(1);
+    expect(await auditActions(db(), f.projectId)).not.toContain("payout_failed");
+  });
+
+  it("a permanent 4xx (bad receiver) marks the payout failed once", async () => {
+    await approve();
+    const p = await live();
+    pp.failNext("createPayout", new PaypalApiError(422, "RECEIVER_UNREGISTERED"));
+    expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: false, error: "paypal_refused" });
+    expect(await live()).toMatchObject({ status: "payout_failed" });
+    expect((await auditActions(db(), f.projectId)).filter((x) => x === "payout_failed")).toHaveLength(1);
+  });
+
+  it("a batch read back without items is not PAID, even if the batch says SUCCESS", async () => {
+    pp.setNextPayoutItemStatus("PENDING");
+    await approve();
+    const p = await live();
+    await sendPayout(db(), pp.api, p.id);
+    pp.setPayoutBatchOnly([...pp.batches.keys()][0]!, "SUCCESS");
+    expect(await reconcilePayout(db(), pp.api, p.id)).toEqual({ ok: true, value: { state: "RELEASED" } });
+    expect((await live()).status).toBe("payout_pending");
+  });
+
+  it("a DENIED or CANCELED batch with no items is a failed payout", async () => {
+    pp.setNextPayoutItemStatus("PENDING");
+    await approve();
+    const p = await live();
+    await sendPayout(db(), pp.api, p.id);
+    pp.setPayoutBatchOnly([...pp.batches.keys()][0]!, "DENIED");
+    expect(await reconcilePayout(db(), pp.api, p.id)).toEqual({ ok: true, value: { state: "RELEASED" } });
+    expect(await live()).toMatchObject({ status: "payout_failed", payoutStatus: "DENIED" });
   });
 
   it("refuses a payout after the payee email changed", async () => {

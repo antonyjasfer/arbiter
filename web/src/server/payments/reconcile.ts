@@ -3,7 +3,7 @@
 // cold start, a deploy), so this is what moves a settled capture to RELEASED and on to the payout.
 // Members only; at most one PayPal round per payment every 30 s. Every move goes through release.ts, so
 // the guard runs before the payout and replays are no-ops.
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { parseId } from "@/lib/ids";
 import type { Result } from "@/lib/result";
 import type { Db } from "../db/types";
@@ -11,7 +11,7 @@ import { payments } from "../db/schema";
 import type { MilestoneState } from "../milestones/state-machine";
 import { loadMilestone, milestoneForRole } from "./context";
 import type { PaypalApi } from "./paypal-api";
-import { reconcileCapture, reconcilePayout, sendPayout } from "./release";
+import { PAYOUT_STOPPED, reconcileCapture, reconcilePayout, sendPayout } from "./release";
 
 export const RECONCILE_EVERY_MS = 30_000;
 
@@ -35,10 +35,24 @@ export async function reconcilePayment(
   const access = await milestoneForRole(db, { userId: args.userId, milestoneId: p.milestoneId, allowed: ["client", "freelancer"] });
   if (!access.ok) return { ok: false, error: "not_found" };
 
-  const now = args.now ?? new Date();
-  const fresh = p.lastReconciledAt !== null && now.getTime() - p.lastReconciledAt.getTime() < RECONCILE_EVERY_MS;
-  const lastError = fresh ? null : await advance(db, api, p.id, access.value.milestone.state);
+  const claimed = await claimRound(db, p.id, args.now ?? new Date());
+  const lastError = claimed ? await advance(db, api, p.id, access.value.milestone.state) : null;
   return view(db, p.id, lastError);
+}
+
+/**
+ * Claim this payment's reconcile slot: one UPDATE that succeeds only if no round ran in the last 30 s, so
+ * concurrent polls (client and freelancer both watching) run one PayPal round, and a PayPal outage is
+ * retried at most every 30 s.
+ */
+async function claimRound(db: Db, paymentId: string, now: Date): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - RECONCILE_EVERY_MS);
+  const rows = await db
+    .update(payments)
+    .set({ lastReconciledAt: now })
+    .where(and(eq(payments.id, paymentId), or(isNull(payments.lastReconciledAt), lt(payments.lastReconciledAt, cutoff))))
+    .returning({ id: payments.id });
+  return rows.length > 0;
 }
 
 /** One reconcile round. Returns an error code, or null. */
@@ -51,13 +65,12 @@ async function advance(db: Db, api: PaypalApi, paymentId: string, state: Milesto
   if (state === "RELEASED") {
     const [p] = await db.select().from(payments).where(eq(payments.id, paymentId));
     if (!p) return "not_found";
-    // A refused or failed payout is left for a human; polling never retries it.
-    if (!p.payoutBatchId && p.status === "payout_failed") return null;
+    // A refused, failed or unknown payout is left for a human; polling never retries it.
+    if (!p.payoutBatchId && PAYOUT_STOPPED.has(p.status)) return null;
     const r = p.payoutBatchId ? await reconcilePayout(db, api, paymentId) : await sendPayout(db, api, paymentId);
     return r.ok ? null : r.error;
   }
   // Other states have nothing to read back yet (authorization read-back: Task 5/6).
-  await db.update(payments).set({ lastReconciledAt: new Date() }).where(eq(payments.id, paymentId));
   return null;
 }
 

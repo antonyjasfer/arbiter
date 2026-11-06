@@ -60,6 +60,21 @@ describe("reconcilePayment (poll and page view)", () => {
     expect(paypalCalls()).toBe(before);
   });
 
+  it("two members polling at the same moment run one PayPal round (the 30 s slot is claimed atomically)", async () => {
+    pp.setNextCaptureStatus("PENDING");
+    await approveRelease(db(), pp.api, { userId: f.client, milestoneId: m1, latestVerdicts: allPass });
+    pp.setCaptureStatus((await live()).captureId!, "COMPLETED");
+    const id = (await live()).id;
+    const now = later(31);
+    await Promise.all([
+      reconcilePayment(db(), pp.api, { userId: f.client, paymentId: id, now }),
+      reconcilePayment(db(), pp.api, { userId: f.freelancer, paymentId: id, now }),
+    ]);
+    expect(pp.count("createPayout")).toBe(1);
+    // One round: the capture read-back, the guard's read-back before the payout.
+    expect(pp.count("getCapture")).toBe(2);
+  });
+
   it("a failed payout is not retried by polling", async () => {
     pp.setNextPayoutItemStatus("FAILED");
     await approveRelease(db(), pp.api, { userId: f.client, milestoneId: m1, latestVerdicts: allPass });

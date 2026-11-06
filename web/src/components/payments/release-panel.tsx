@@ -28,8 +28,8 @@ type Props = {
 };
 
 function statusLine(state: string, paymentStatus: string, p: Props): string {
-  if (paymentStatus === "payout_failed") return errorText("payout_failed");
-  if (paymentStatus === "capture_denied") return "PayPal declined the capture. Nothing was charged; the milestone needs to be funded again.";
+  if (paymentStatus === "payout_failed" || paymentStatus === "payout_unknown") return errorText(paymentStatus);
+  if (paymentStatus === "capture_denied") return "PayPal declined the capture, so nothing was charged and the freelancer wasn't paid. Contact support.";
   switch (state) {
     case "APPROVED":
       return "Approved. Arbiter is capturing the payment with PayPal.";
@@ -64,7 +64,7 @@ export function ReleasePanel(props: Props) {
           setState(v.state);
           setPaymentStatus(v.paymentStatus);
           if (v.state !== props.state) router.refresh();
-          if (!SETTLING.has(v.state) || v.paymentStatus === "payout_failed") return;
+          if (!SETTLING.has(v.state) || v.paymentStatus === "payout_failed" || v.paymentStatus === "payout_unknown") return;
         }
       } catch {
         // Offline or the server is waking up: try again on the next tick.
