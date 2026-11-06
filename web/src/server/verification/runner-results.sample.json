@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "run_name": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "plan_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "plan_error": null,
+  "status": "ok",
+  "warmup": { "ok": true, "attempts": 1, "ms": 0, "status": 200 },
+  "criteria": {
+    "m1c1": {
+      "status": "pass",
+      "failed_step": null,
+      "reason": null,
+      "steps": [
+        { "index": 0, "op": "goto", "status": "pass", "reason": null, "ms": 210, "actual_status": 200, "mismatched_keys": [], "screenshot": null },
+        { "index": 1, "op": "fill_by_label", "status": "pass", "reason": null, "ms": 35, "actual_status": null, "mismatched_keys": [], "screenshot": null },
+        { "index": 2, "op": "click_by_role", "status": "pass", "reason": null, "ms": 60, "actual_status": null, "mismatched_keys": [], "screenshot": null },
+        { "index": 3, "op": "expect_text", "status": "pass", "reason": null, "ms": 12, "actual_status": null, "mismatched_keys": [], "screenshot": "shots/0.jpg" }
+      ]
+    },
+    "m1c2": {
+      "status": "fail",
+      "failed_step": 1,
+      "reason": "not_found",
+      "steps": [
+        { "index": 0, "op": "goto", "status": "pass", "reason": null, "ms": 180, "actual_status": 200, "mismatched_keys": [], "screenshot": null },
+        { "index": 1, "op": "expect_text", "status": "fail", "reason": "not_found", "ms": 1500, "actual_status": null, "mismatched_keys": [], "screenshot": "shots/1.jpg" },
+        { "index": 2, "op": "expect_text", "status": "skipped", "reason": null, "ms": 0, "actual_status": null, "mismatched_keys": [], "screenshot": null }
+      ]
+    },
+    "m1c3": {
+      "status": "fail",
+      "failed_step": 0,
+      "reason": "json_mismatch",
+      "steps": [
+        { "index": 0, "op": "http_get", "status": "fail", "reason": "json_mismatch", "ms": 8, "actual_status": 200, "mismatched_keys": ["status"], "screenshot": null }
+      ]
+    },
+    "m1c4": {
+      "status": "error",
+      "failed_step": null,
+      "reason": "budget_exhausted",
+      "steps": [
+        { "index": 0, "op": "goto", "status": "skipped", "reason": null, "ms": 0, "actual_status": null, "mismatched_keys": [], "screenshot": null }
+      ]
+    }
+  },
+  "screenshots_skipped": 0
+}

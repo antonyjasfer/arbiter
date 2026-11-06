@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkPlanSchema, criterionPlanSchema, MAX_STEPS, planHash, resultsSchema, type CheckPlan } from "./plan-dsl";
+import runnerSample from "./runner-results.sample.json";
 
 const ok = (v: unknown) => criterionPlanSchema.safeParse(v).success;
 
@@ -143,6 +144,14 @@ describe("results.json contract (written by arbiter-runner browser/run-plan.mjs)
     expect(parses(doc({ run_name: "verify 1" }))).toBe(false);
     expect(parses(doc({ criteria: { crit1: { status: "error", failed_step: null, reason: "error", steps: [] } } }))).toBe(false);
     expect(parses(doc({ plan_error: "line1\nline2" }))).toBe(false);
+  });
+
+  it("accepts the runner's own output shapes (arbiter-runner browser/run-plan.mjs)", () => {
+    expect(resultsSchema.safeParse(runnerSample).error).toBeUndefined();
+    const unreachable = { ...runnerSample, status: "site_unreachable", warmup: { ok: false, attempts: 18, ms: 90000, status: 503 }, criteria: { m1c1: { status: "error", failed_step: null, reason: "site_unreachable", steps: [] } } };
+    expect(resultsSchema.safeParse(unreachable).error).toBeUndefined();
+    const warmupNoStatus = { ...runnerSample, status: "site_unreachable", warmup: { ok: false, attempts: 18, ms: 90000, status: null }, criteria: {} };
+    expect(resultsSchema.safeParse(warmupNoStatus).error).toBeUndefined();
   });
 
   it("keeps status, failed_step and reason consistent", () => {
