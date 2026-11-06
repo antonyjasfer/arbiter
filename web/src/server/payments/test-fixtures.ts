@@ -7,6 +7,9 @@ import type { Db } from "../db/types";
 import * as s from "../db/schema";
 import { acceptInvite, createInvite } from "../projects/invitations";
 import { createProject } from "../projects/projects";
+import { transitionMilestone } from "../milestones/transition";
+import { completeFunding, startFunding } from "./funding";
+import type { PaypalApi } from "./paypal-api";
 
 export const FREELANCER_EMAIL = "freelancer@example.test";
 
@@ -53,6 +56,28 @@ export async function lockedProject(db: Db, opts: { freelancerEmail?: string | n
   }
   const ms = await db.select({ id: s.milestones.id, position: s.milestones.position }).from(s.milestones).orderBy(s.milestones.position);
   return { client, freelancer, outsider, projectId, milestoneIds: ms.map((m) => m.id) };
+}
+
+/** Funds the milestone through the real flow against the fake PayPal (the buyer approves). */
+export async function fundMilestone(db: Db, pp: { api: PaypalApi; approve(orderId: string): void }, f: Fixture, milestoneId: string): Promise<void> {
+  const started = await startFunding(db, pp.api, { userId: f.client, milestoneId });
+  if (!started.ok) throw new Error(`fixture: startFunding ${started.error}`);
+  pp.approve(started.value.orderId);
+  const done = await completeFunding(db, pp.api, { userId: f.client, milestoneId, orderId: started.value.orderId });
+  if (!done.ok) throw new Error(`fixture: completeFunding ${done.error}`);
+}
+
+/** FUNDED -> SUBMITTED -> VERIFYING -> REPORT_READY through guarded transitions (Phase 4 does this for real). */
+export async function toReportReady(db: Db, milestoneId: string): Promise<void> {
+  for (const [from, event] of [
+    ["FUNDED", "submit"],
+    ["SUBMITTED", "start_verification"],
+    ["VERIFYING", "report_ready"],
+  ] as const) {
+    const m = await milestoneRow(db, milestoneId);
+    const r = await transitionMilestone(db, { milestoneId, expectedState: from, expectedVersion: m.stateVersion, event });
+    if (!r.ok) throw new Error(`fixture: ${event} ${r.error}`);
+  }
 }
 
 export async function milestoneRow(db: Db, id: string) {
