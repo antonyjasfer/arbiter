@@ -24,6 +24,8 @@ export class PaypalApiError extends Error {
 
 export type PaypalOrder = { id: string; status: string };
 export type PaypalAuthorization = { id: string; status: string; amountCents: number; currency: string; createTime: Date | null; expirationTime: Date | null };
+export type PaypalCapture = { id: string; status: string; statusReason: string | null; amountCents: number | null; currency: string | null };
+export type PaypalPayoutBatch = { batchId: string; batchStatus: string; items: { itemId: string; status: string | null }[] };
 
 const PAYPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 const money = z.object({ currency_code: z.string(), value: z.string() });
@@ -37,6 +39,18 @@ const authorizationSchema = z.object({
 });
 const authorizeResponseSchema = orderSchema.extend({
   purchase_units: z.array(z.object({ payments: z.object({ authorizations: z.array(authorizationSchema).optional() }).optional() })).optional(),
+});
+// Capture statuses (Payments v2 schema): COMPLETED, DECLINED, PARTIALLY_REFUNDED, PENDING, REFUNDED, FAILED.
+const captureSchema = z.object({
+  id: z.string().regex(PAYPAL_ID),
+  status: z.string(),
+  status_details: z.object({ reason: z.string().optional() }).optional(),
+  amount: money.optional(),
+});
+// Payouts v1: the POST 201 holds only batch_header and links; items come from the GET.
+const payoutHeaderSchema = z.object({ batch_header: z.object({ payout_batch_id: z.string().regex(PAYPAL_ID), batch_status: z.string() }) });
+const payoutBatchSchema = payoutHeaderSchema.extend({
+  items: z.array(z.object({ payout_item_id: z.string().regex(PAYPAL_ID), transaction_status: z.string().optional() })).optional(),
 });
 const errorSchema = z.object({ name: z.string().optional(), details: z.array(z.object({ issue: z.string().optional() })).optional() });
 
@@ -102,6 +116,55 @@ export function createPaypalApi(http: PaypalHttp) {
       if (!a) throw new Error("PayPal authorize response has no authorization");
       return toAuthorization(a);
     },
+
+    async getAuthorization(authorizationId: string): Promise<PaypalAuthorization> {
+      const res = await http.get(`/v2/payments/authorizations/${checkId(authorizationId)}`);
+      return toAuthorization(parse(authorizationSchema, ensureOk(res), "authorization"));
+    },
+
+    /** A final capture of the whole authorization. invoice_id ties it to our payment row. */
+    async captureAuthorization(authorizationId: string, args: { amountCents: number; invoiceId: string; requestId: string }): Promise<PaypalCapture> {
+      const path = `/v2/payments/authorizations/${checkId(authorizationId)}/capture`;
+      const body = { amount: { currency_code: "USD", value: centsToMoney(args.amountCents) }, final_capture: true, invoice_id: args.invoiceId };
+      return toCapture(parse(captureSchema, ensureOk(await http.post(path, body, { requestId: args.requestId })), "capture"));
+    },
+
+    async getCapture(captureId: string): Promise<PaypalCapture> {
+      const res = await http.get(`/v2/payments/captures/${checkId(captureId)}`);
+      return toCapture(parse(captureSchema, ensureOk(res), "capture"));
+    },
+
+    /**
+     * One EMAIL payout. senderBatchId is deterministic per payment: PayPal rejects a sender_batch_id reused
+     * within 30 days, so even a lost request id cannot pay twice. The request id is kept 30 days too.
+     */
+    async createPayout(args: { senderBatchId: string; receiver: string; amountCents: number; requestId: string; note: string }): Promise<{ batchId: string; batchStatus: string }> {
+      const body = {
+        sender_batch_header: { sender_batch_id: checkId(args.senderBatchId), email_subject: "You have a payout from Arbiter (sandbox)", email_message: args.note },
+        items: [{ recipient_type: "EMAIL", receiver: args.receiver, amount: { value: centsToMoney(args.amountCents), currency: "USD" }, note: args.note, sender_item_id: args.senderBatchId }],
+      };
+      const h = parse(payoutHeaderSchema, ensureOk(await http.post("/v1/payments/payouts", body, { requestId: args.requestId })), "payout");
+      return { batchId: h.batch_header.payout_batch_id, batchStatus: h.batch_header.batch_status };
+    },
+
+    async getPayoutBatch(batchId: string): Promise<PaypalPayoutBatch> {
+      const b = parse(payoutBatchSchema, ensureOk(await http.get(`/v1/payments/payouts/${checkId(batchId)}`)), "payout batch");
+      return {
+        batchId: b.batch_header.payout_batch_id,
+        batchStatus: b.batch_header.batch_status,
+        items: (b.items ?? []).map((i) => ({ itemId: i.payout_item_id, status: i.transaction_status ?? null })),
+      };
+    },
+  };
+}
+
+function toCapture(c: z.infer<typeof captureSchema>): PaypalCapture {
+  return {
+    id: c.id,
+    status: c.status,
+    statusReason: c.status_details?.reason ?? null,
+    amountCents: c.amount ? paypalMoneyToCents(c.amount.value) : null,
+    currency: c.amount?.currency_code ?? null,
   };
 }
 

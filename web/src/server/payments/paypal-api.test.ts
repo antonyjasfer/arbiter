@@ -83,3 +83,60 @@ describe("authorizeOrder", () => {
     await expect(createPaypalApi(h).authorizeOrder("ORDER1", "r")).rejects.toThrow(/authorization/);
   });
 });
+
+describe("captureAuthorization", () => {
+  it("posts a final capture of the exact amount with the request id and returns the capture", async () => {
+    const body = { id: "CAP1", status: "PENDING", status_details: { reason: "PENDING_REVIEW" }, amount: { currency_code: "USD", value: "50.00" } };
+    const { h, calls } = http([{ status: 201, body }]);
+    const r = await createPaypalApi(h).captureAuthorization("AUTH1", { amountCents: 5000, invoiceId: "p-1", requestId: "rid-c" });
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/v2/payments/authorizations/AUTH1/capture", requestId: "rid-c" });
+    expect(calls[0]!.body).toEqual({ amount: { currency_code: "USD", value: "50.00" }, final_capture: true, invoice_id: "p-1" });
+    expect(r).toEqual({ id: "CAP1", status: "PENDING", statusReason: "PENDING_REVIEW", amountCents: 5000, currency: "USD" });
+  });
+
+  it("refuses ids that are not PayPal-shaped", async () => {
+    const { h, calls } = http([]);
+    await expect(createPaypalApi(h).captureAuthorization("../x", { amountCents: 5000, invoiceId: "p", requestId: "r" })).rejects.toThrow(/id/);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("getCapture and getAuthorization", () => {
+  it("read a capture and an authorization back with GETs", async () => {
+    const { h, calls } = http([
+      { status: 200, body: { id: "CAP1", status: "COMPLETED", amount: { currency_code: "USD", value: "50.00" } } },
+      { status: 200, body: { id: "AUTH1", status: "VOIDED", amount: { currency_code: "USD", value: "50.00" } } },
+    ]);
+    const api = createPaypalApi(h);
+    expect(await api.getCapture("CAP1")).toEqual({ id: "CAP1", status: "COMPLETED", statusReason: null, amountCents: 5000, currency: "USD" });
+    expect((await api.getAuthorization("AUTH1")).status).toBe("VOIDED");
+    expect(calls.map((c) => c.path)).toEqual(["/v2/payments/captures/CAP1", "/v2/payments/authorizations/AUTH1"]);
+  });
+});
+
+describe("createPayout", () => {
+  it("posts one EMAIL item with the sender batch id and request id, and returns the batch header", async () => {
+    const { h, calls } = http([{ status: 201, body: { batch_header: { payout_batch_id: "BATCH1", batch_status: "PENDING", sender_batch_header: { sender_batch_id: "arbiter-p-1" } }, links: [] } }]);
+    const r = await createPaypalApi(h).createPayout({ senderBatchId: "arbiter-p-1", receiver: "f@example.test", amountCents: 4650, requestId: "rid-p", note: "Milestone 1" });
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/v1/payments/payouts", requestId: "rid-p" });
+    expect(calls[0]!.body).toMatchObject({
+      sender_batch_header: { sender_batch_id: "arbiter-p-1" },
+      items: [{ recipient_type: "EMAIL", receiver: "f@example.test", amount: { value: "46.50", currency: "USD" }, sender_item_id: "arbiter-p-1" }],
+    });
+    expect(r).toEqual({ batchId: "BATCH1", batchStatus: "PENDING" });
+  });
+});
+
+describe("getPayoutBatch", () => {
+  it("reads the batch and its items", async () => {
+    const { h, calls } = http([
+      {
+        status: 200,
+        body: { batch_header: { payout_batch_id: "BATCH1", batch_status: "SUCCESS" }, items: [{ payout_item_id: "ITEM1", transaction_status: "SUCCESS", payout_batch_id: "BATCH1" }] },
+      },
+    ]);
+    const r = await createPaypalApi(h).getPayoutBatch("BATCH1");
+    expect(calls[0]).toEqual({ method: "GET", path: "/v1/payments/payouts/BATCH1" });
+    expect(r).toEqual({ batchId: "BATCH1", batchStatus: "SUCCESS", items: [{ itemId: "ITEM1", status: "SUCCESS" }] });
+  });
+});
