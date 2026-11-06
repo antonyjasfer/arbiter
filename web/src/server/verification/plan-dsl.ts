@@ -72,3 +72,64 @@ export type CheckPlan = z.infer<typeof checkPlanSchema>;
 export function planHash(plan: CheckPlan): string {
   return sha256Hex(canonicalJson(plan));
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// results.json: written by the trusted browser job (arbiter-runner browser/run-plan.mjs) and uploaded as the
+// single artifact "arbiter-results". It carries only fixed reason codes, plan keys and numbers, never text
+// from the deployed site, so nothing the site renders can reach a verdict or a model prompt through it.
+// plan_sha256 is the sha256 of the decoded plan_b64 bytes Arbiter dispatched, binding results to that plan.
+export const RESULTS_ARTIFACT = "arbiter-results";
+export const RESULTS_FILE = "results.json";
+export const STEP_REASONS = [
+  "timeout", "not_found", "ambiguous", "navigation_failed", "http_error", "status_mismatch", "json_mismatch",
+  "not_json", "not_checked", "origin_mismatch", "budget_exhausted", "site_unreachable", "error",
+] as const;
+export const BROWSER_OPS = ["goto", "fill_by_label", "click_by_role", "expect_text", "expect_checkbox_checked", "http_get"] as const;
+const RUN_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const stepIndex = z.number().int().min(0).max(MAX_STEPS - 1);
+const httpStatus = z.number().int().min(0).max(999);
+const ms = z.number().int().min(0).max(3_600_000);
+const reason = z.enum(STEP_REASONS);
+
+export const stepResultSchema = z.strictObject({
+  index: stepIndex,
+  op: z.enum(BROWSER_OPS),
+  status: z.enum(["pass", "fail", "skipped"]),
+  reason: reason.nullable(),
+  ms,
+  actual_status: httpStatus.nullable(),
+  mismatched_keys: z.array(z.string().min(1).max(100)).max(10),
+  screenshot: z.string().regex(/^shots\/\d{1,2}\.jpg$/).nullable(),
+});
+
+export const criterionResultSchema = z
+  .strictObject({
+    status: z.enum(["pass", "fail", "error"]),
+    failed_step: stepIndex.nullable(),
+    reason: reason.nullable(),
+    steps: z.array(stepResultSchema).max(MAX_STEPS),
+  })
+  .refine(
+    (c) =>
+      c.status === "pass"
+        ? c.failed_step === null && c.reason === null && c.steps.every((s) => s.status === "pass")
+        : c.status === "fail"
+          ? c.failed_step !== null && c.reason !== null && c.steps[c.failed_step]?.status === "fail"
+          : c.failed_step === null && c.reason !== null,
+    "status, failed_step and reason disagree",
+  );
+
+export const resultsSchema = z.strictObject({
+  version: z.literal(1),
+  run_name: z.string().regex(RUN_NAME),
+  plan_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  status: z.enum(["ok", "plan_invalid", "site_unreachable"]),
+  plan_error: z.string().max(200).regex(/^[ -~]*$/).nullable(),
+  warmup: z.strictObject({ ok: z.boolean(), attempts: z.number().int().min(0).max(100), ms, status: httpStatus.nullable() }),
+  criteria: z.record(z.string().regex(CRITERION_KEY), criterionResultSchema),
+  screenshots_skipped: z.number().int().min(0).max(1000),
+});
+
+export type StepResult = z.infer<typeof stepResultSchema>;
+export type CriterionResult = z.infer<typeof criterionResultSchema>;
+export type Results = z.infer<typeof resultsSchema>;

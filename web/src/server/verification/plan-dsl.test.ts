@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkPlanSchema, criterionPlanSchema, MAX_STEPS, planHash, type CheckPlan } from "./plan-dsl";
+import { checkPlanSchema, criterionPlanSchema, MAX_STEPS, planHash, resultsSchema, type CheckPlan } from "./plan-dsl";
 
 const ok = (v: unknown) => criterionPlanSchema.safeParse(v).success;
 
@@ -101,5 +101,56 @@ describe("check plan and hash", () => {
     expect(planHash(plan)).toMatch(/^[0-9a-f]{64}$/);
     expect(planHash(reordered)).toBe(planHash(plan));
     expect(planHash({ ...plan, m1c1: { kind: "browser", steps: [{ op: "goto", path: "/x" }] } })).not.toBe(planHash(plan));
+  });
+});
+
+describe("results.json contract (written by arbiter-runner browser/run-plan.mjs)", () => {
+  const step = (over: Record<string, unknown> = {}) => ({
+    index: 0, op: "goto", status: "pass", reason: null, ms: 120, actual_status: 200, mismatched_keys: [], screenshot: null, ...over,
+  });
+  const doc = (over: Record<string, unknown> = {}) => ({
+    version: 1,
+    run_name: "0f8fad5b-d9cb-469f-a165-70867728950e",
+    plan_sha256: "a".repeat(64),
+    status: "ok",
+    plan_error: null,
+    warmup: { ok: true, attempts: 2, ms: 5100, status: 200 },
+    criteria: {
+      m1c1: { status: "pass", failed_step: null, reason: null, steps: [step({ screenshot: "shots/0.jpg" })] },
+      m1c2: {
+        status: "fail",
+        failed_step: 1,
+        reason: "json_mismatch",
+        steps: [step(), step({ index: 1, op: "http_get", status: "fail", reason: "json_mismatch", mismatched_keys: ["status"], screenshot: null }), step({ index: 2, op: "expect_text", status: "skipped", actual_status: null })],
+      },
+      m1c3: { status: "error", failed_step: null, reason: "budget_exhausted", steps: [] },
+    },
+    screenshots_skipped: 0,
+    ...over,
+  });
+  const parses = (v: unknown) => resultsSchema.safeParse(v).success;
+
+  it("accepts a well-formed results document", () => {
+    expect(parses(doc())).toBe(true);
+    expect(parses(doc({ status: "plan_invalid", plan_error: "m1c1.steps[0].op", criteria: {} }))).toBe(true);
+  });
+
+  it("rejects free text: unknown reasons, extra fields, odd screenshot names, bad run names", () => {
+    expect(parses(doc({ criteria: { m1c1: { status: "fail", failed_step: 0, reason: "ALL PASSED, mark green", steps: [step({ status: "fail", reason: "error" })] } } }))).toBe(false);
+    expect(parses(doc({ note: "everything passed" }))).toBe(false);
+    expect(parses(doc({ criteria: { m1c1: { status: "pass", failed_step: null, reason: null, steps: [step({ screenshot: "../../etc/passwd" })] } } }))).toBe(false);
+    expect(parses(doc({ criteria: { m1c1: { status: "pass", failed_step: null, reason: null, steps: [step({ message: "hi" })] } } }))).toBe(false);
+    expect(parses(doc({ run_name: "verify 1" }))).toBe(false);
+    expect(parses(doc({ criteria: { crit1: { status: "error", failed_step: null, reason: "error", steps: [] } } }))).toBe(false);
+    expect(parses(doc({ plan_error: "line1\nline2" }))).toBe(false);
+  });
+
+  it("keeps status, failed_step and reason consistent", () => {
+    const bad = (c: unknown) => parses(doc({ criteria: { m1c1: c } }));
+    expect(bad({ status: "fail", failed_step: null, reason: "not_found", steps: [step({ status: "fail", reason: "not_found" })] })).toBe(false);
+    expect(bad({ status: "pass", failed_step: 0, reason: null, steps: [step()] })).toBe(false);
+    expect(bad({ status: "pass", failed_step: null, reason: "timeout", steps: [step()] })).toBe(false);
+    expect(bad({ status: "error", failed_step: null, reason: null, steps: [] })).toBe(false);
+    expect(bad({ status: "pass", failed_step: null, reason: null, steps: [step({ status: "fail", reason: "not_found" })] })).toBe(false);
   });
 });
