@@ -285,6 +285,32 @@ describe("runStep", () => {
     expect(byKey.m1c4!.verdict).toBe("needs_review");
     expect(results.every((r) => r.source === "deterministic")).toBe(true);
     expect(await auditActions()).toContain("verification_finished");
+    const ev = await db().select().from(s.evidence).where(eq(s.evidence.runId, id));
+    expect(ev.find((e) => e.type === "run_link")).toMatchObject({ uri: "https://github.com/antonyjasfer/arbiter-runner/actions/runs/4242", checkResultId: null });
+    expect(ev.find((e) => e.type === "results")).toMatchObject({ contentType: "application/json" });
+    // The fake artifact has no shots/0.jpg: recorded as skipped against m1c1, not stored.
+    expect(ev.find((e) => e.type === "screenshot")).toMatchObject({ content: null, checkResultId: byKey.m1c1!.id });
+  });
+
+  it("with an AI, the finishing step adds summaries that change no verdict", async () => {
+    const runner = fakeRunner();
+    const id = await dispatchedAndFound(runner);
+    const row = await runRow(id);
+    runner.results = { ...okResults(runner.dispatches[0]!.planB64), run_name: row.dispatchKey };
+    runner.run = { ...runner.run!, status: "completed", conclusion: "success" };
+    runner.jobs = doneJobs();
+    runner.artifacts = [RESULTS_ART];
+    const reviewer: StructuredAi = {
+      model: "fake-model",
+      async generate<T>(req: AiRequest<T>): Promise<AiSuccess<T> | AiFailure> {
+        const data = req.schema.parse({ summaries: f.criteria.map((c) => ({ criterion_key: c.key, summary: "Everything passed." })) });
+        return { ok: true, data, model: "fake-model", cached: false, usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+    await runStep(db(), runner, id, () => at(3 * POLL_MS), reviewer);
+    const results = await db().select().from(s.checkResults).where(eq(s.checkResults.runId, id));
+    expect(results.map((r) => r.verdict).sort()).toEqual(["fail", "needs_review", "pass", "pass"]);
+    expect(results.every((r) => r.aiSummary === "Everything passed.")).toBe(true);
   });
 
   it("a failed tests job makes the test criterion FAIL", async () => {

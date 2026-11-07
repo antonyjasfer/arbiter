@@ -20,7 +20,9 @@ import type { Db } from "../db/types";
 import { checkResults, milestones, submissions, verificationRuns } from "../db/schema";
 import { transitionMilestone } from "../milestones/transition";
 import { scanRepo } from "./injection-scan";
-import { checkPlanSchema, planHash, RESULTS_FILE, resultsSchema, type CheckPlan } from "./plan-dsl";
+import { planEvidence, storeEvidence } from "./evidence";
+import { checkPlanSchema, planHash, RESULTS_FILE, resultsSchema, type CheckPlan, type Results } from "./plan-dsl";
+import { reviewRun } from "./reviewer";
 import { loadCriteria, planChecks, type PlanError } from "./planner";
 import type { Job, RunnerClient } from "./runner-client";
 import { checkRepoUrl, milestoneProject } from "./submissions";
@@ -138,24 +140,37 @@ function jobsSummary(jobs: Job[]) {
   return jobs.map((j) => ({ name: j.name.slice(0, 50), conclusion: j.conclusion, startedAt: j.startedAt, completedAt: j.completedAt, steps: j.steps.map((s) => ({ name: s.name.slice(0, 100), conclusion: s.conclusion })) }));
 }
 
-async function finish(db: Db, run: Run, plan: CheckPlan, verdicts: Record<string, CriterionVerdict>, jobs: Job[], now: Date) {
+async function finish(
+  db: Db,
+  run: Run,
+  plan: CheckPlan,
+  verdicts: Record<string, CriterionVerdict>,
+  jobs: Job[],
+  now: Date,
+  artifact: { files: Record<string, Uint8Array>; results: Results | null },
+): Promise<boolean> {
   const { sub, projectId } = await runContext(db, run);
   const criteria = await loadCriteria(db, sub.milestoneId);
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const [held] = await tx.select({ id: verificationRuns.id }).from(verificationRuns).where(mine(run)).for("update");
-    if (!held) return; // lease was taken over; the newer step will write
+    if (!held) return false; // lease was taken over; the newer step will write
+    const keyOf = new Map(criteria.map((c) => [c.id, c.key]));
     const rows = criteria.filter((c) => verdicts[c.key]).map((c) => ({ runId: run.id, criterionId: c.id, verdict: verdicts[c.key]!.verdict, source: verdicts[c.key]!.source, detail: verdicts[c.key]!.detail }));
-    if (rows.length) await tx.insert(checkResults).values(rows);
+    const inserted = rows.length ? await tx.insert(checkResults).values(rows).returning({ id: checkResults.id, criterionId: checkResults.criterionId }) : [];
+    const checkResultIdByKey = Object.fromEntries(inserted.map((r) => [keyOf.get(r.criterionId)!, r.id]));
+    await storeEvidence(tx, planEvidence({ runId: run.id, runUrl: run.runUrl, files: artifact.files, results: artifact.results, checkResultIdByKey }).rows);
     await tx.update(verificationRuns).set({ status: "completed", jobsSummary: jobsSummary(jobs), errorCode: null, errorDetail: null, leaseUntil: null, finishedAt: now }).where(mine(run));
     await moveMilestone(tx, sub.milestoneId, "report_ready");
     const count = (v: string) => rows.filter((r) => r.verdict === v).length;
     await appendAudit(tx, { projectId, actorId: null, action: "verification_finished", data: { milestoneId: sub.milestoneId, runId: run.id, pass: count("pass"), fail: count("fail"), needsReview: count("needs_review"), planKeys: Object.keys(plan).length } });
+    return true;
   });
 }
 
 const TRANSIENT = new Set(["github_error", "rate_limited"]);
 
-async function advance(db: Db, runner: RunnerClient, run: Run, now: Date): Promise<void> {
+/** Returns true only when this step wrote the run's verdicts. */
+async function advance(db: Db, runner: RunnerClient, run: Run, now: Date): Promise<boolean | void> {
   const later = () => db.update(verificationRuns).set({ leaseUntil: null, nextAttemptAt: new Date(now.getTime() + POLL_MS) }).where(mine(run));
   const parsedPlan = checkPlanSchema.safeParse(run.plan);
   if (!parsedPlan.success || planHash(parsedPlan.data) !== run.planHash) return errorRun(db, run, "dispatch_failed", "stored plan is invalid", now);
@@ -210,6 +225,7 @@ async function advance(db: Db, runner: RunnerClient, run: Run, now: Date): Promi
   if (check.kind === "rejected") return errorRun(db, run, check.error_code, check.detail, now);
 
   let results: ResultsInput;
+  let artifactFiles: Record<string, Uint8Array> = {};
   if (check.kind === "missing") results = check;
   else {
     const files = await runner.downloadArtifact(runId, check.artifact.id);
@@ -228,6 +244,7 @@ async function advance(db: Db, runner: RunnerClient, run: Run, now: Date): Promi
     if (!r.success) return errorRun(db, run, "bad_results", "results.json is missing or invalid", now);
     if (r.data.run_name !== run.dispatchKey || r.data.plan_sha256 !== run.planHash) return errorRun(db, run, "bad_results", "results.json is for another run or plan", now);
     results = { kind: "accepted", results: r.data };
+    artifactFiles = files.value;
   }
 
   // Static checks: files read at the pinned commit through the GitHub API, never executed.
@@ -243,15 +260,26 @@ async function advance(db: Db, runner: RunnerClient, run: Run, now: Date): Promi
     for (const k of staticKeys) staticResults[k] = evaluateStatic(plan[k]!, files);
   }
 
-  await finish(db, run, plan, computeVerdicts(plan, jobs.value, results, staticResults), jobs.value, now);
+  return finish(db, run, plan, computeVerdicts(plan, jobs.value, results, staticResults), jobs.value, now, {
+    files: artifactFiles,
+    results: results.kind === "accepted" ? results.results : null,
+  });
 }
 
-/** Advances one run by at most one step, if it is due. Safe to call from any number of pollers. */
-export async function runStep(db: Db, runner: RunnerClient, runId: string, clock: () => Date = () => new Date()): Promise<void> {
+/**
+ * Advances one run by at most one step, if it is due. Safe to call from any number of pollers. With `ai`,
+ * the step that writes the verdicts then asks the Evidence Reviewer for summaries (once; a failure leaves
+ * ai_summary null and the report still loads).
+ */
+export async function runStep(db: Db, runner: RunnerClient, runId: string, clock: () => Date = () => new Date(), ai?: StructuredAi): Promise<void> {
   const run = await claimRun(db, runId, clock());
   if (!run) return;
   try {
-    await advance(db, runner, run, clock());
+    const finished = await advance(db, runner, run, clock());
+    if (finished && ai) {
+      const r = await reviewRun(db, ai, { runId: run.id, now: clock() });
+      if (!r.ok) console.error("evidence reviewer skipped:", r.error);
+    }
   } catch (e) {
     // Release the lease so the next poll retries; never log request details or tokens.
     await db
@@ -264,9 +292,9 @@ export async function runStep(db: Db, runner: RunnerClient, runId: string, clock
 }
 
 /** Advances every due run (boot and status polls). */
-export async function resumeDueRuns(db: Db, runner: RunnerClient, clock: () => Date = () => new Date()): Promise<number> {
+export async function resumeDueRuns(db: Db, runner: RunnerClient, clock: () => Date = () => new Date(), ai?: StructuredAi): Promise<number> {
   const rows = await db.select({ id: verificationRuns.id }).from(verificationRuns).where(due(clock())).limit(5);
-  for (const { id } of rows) await runStep(db, runner, id, clock);
+  for (const { id } of rows) await runStep(db, runner, id, clock, ai);
   return rows.length;
 }
 
