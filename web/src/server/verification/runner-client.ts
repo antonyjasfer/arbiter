@@ -172,6 +172,12 @@ export function createRunnerClient(cfg: RunnerConfig, fetchFn: typeof fetch = fe
       return { ok: true, value: match ? { id: match.id, htmlUrl: match.html_url, status: match.status ?? "unknown", conclusion: match.conclusion } : null };
     },
 
+    async getRun(runId: number): Promise<Result<WorkflowRun, RunnerError>> {
+      const r = await getJson(`/repos/${cfg.repo}/actions/runs/${runId}`, runsSchema.shape.workflow_runs.element);
+      if (!r.ok) return r;
+      return { ok: true, value: { id: r.value.id, htmlUrl: r.value.html_url, status: r.value.status ?? "unknown", conclusion: r.value.conclusion } };
+    },
+
     async getJobs(runId: number): Promise<Result<Job[], RunnerError>> {
       const r = await getJson(`/repos/${cfg.repo}/actions/runs/${runId}/jobs?per_page=50`, jobsSchema);
       if (!r.ok) return r;

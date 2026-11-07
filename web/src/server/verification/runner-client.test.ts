@@ -101,6 +101,12 @@ describe("runs, jobs and artifacts", () => {
     expect(f.calls[0]!.url).toContain("/actions/workflows/verify.yml/runs?event=workflow_dispatch");
   });
 
+  it("reads one run's status by id", async () => {
+    const f = fakeFetch(json({ id: 42, display_title: RUN_NAME, created_at: "2026-11-05T10:00:03Z", html_url: "https://github.com/x/42", status: "completed", conclusion: "failure" }));
+    expect(await createRunnerClient(cfg, f.fn).getRun(42)).toEqual({ ok: true, value: { id: 42, htmlUrl: "https://github.com/x/42", status: "completed", conclusion: "failure" } });
+    expect(f.calls[0]!.url).toBe("https://api.github.com/repos/antonyjasfer/arbiter-runner/actions/runs/42");
+  });
+
   it("returns null when no run carries the name yet", async () => {
     const r = await createRunnerClient(cfg, fakeFetch(json({ total_count: 0, workflow_runs: [] })).fn).findRunByName(RUN_NAME, new Date());
     expect(r).toEqual({ ok: true, value: null });
