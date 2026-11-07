@@ -102,3 +102,11 @@ _Filled in by the phase-4-verification branch. Phase 5 never edits this section.
 
 ## Phase 5 live checks
 _Filled in by the phase-5-payments branch. Phase 4 never edits this section._
+
+### Local end-to-end sandbox payment (Task 8), started 2026-11-07
+- **Setup:** local only, `next build` + `next start -p 3001` with `DEMO_MODE=true`, branch `phase-5-payments` at commit `39fa3b2`, PayPal sandbox, shared Neon DB. Demo project TaskBoard (`c1954803-1064-457e-8df0-30cdce1af8f0`); client = demo client, payee = demo freelancer (`PAYPAL_FREELANCER_EMAIL`).
+- **Why production mode:** on 6 Nov `next dev` ran out of memory (about 1 GB free of 8 GB): its route workers crashed on every new compile (`Jest worker encountered 2 child process exceptions`) and the project page answered 307. `next start` uses far less memory and served the page normally (10:41 IST).
+- **No webhooks reach localhost:** every state move after funding comes from reconcile-on-poll (`GET /api/payments/:id`), which also exercises the lost-webhook path (Review Focus 5).
+- **Run log** (IST; IDs from PayPal and the DB):
+  - _(filled in as the run happens)_
+- **Noted for Phase 6 (not fixed here):** `/dashboard` logs a Next prerender error, `crypto.getRandomValues()` called while prerendering at `src/app/(app)/dashboard/page.tsx:65` (`<Projects />`); the page still returns 200. Fix with a dynamic access (`await connection()`) or by moving the random value to the client.
