@@ -18,4 +18,5 @@ if (process.env.NEXT_PHASE !== "phase-production-build") {
   void Promise.all([import("@/server/agreements/compile-jobs"), import("@/server/ai/default-ai"), import("@/server/db/client")])
     .then(([jobs, ai, db]) => jobs.resumeDueJobs(db.getDb(), ai.getAi()))
     .catch((e: unknown) => console.error("compile-jobs resume on boot failed:", e instanceof Error ? e.name : "error"));
+  void Promise.all([import("@/server/verification/runs"), import("@/server/verification/runner-client"), import("@/server/db/client")]).then(([runs, rc, db]) => { const c = rc.getRunnerClient(); return c.ok ? runs.resumeDueRuns(db.getDb(), c.value) : 0; }).catch((e: unknown) => console.error("verification resume on boot failed:", e instanceof Error ? e.name : "error"));
 }
