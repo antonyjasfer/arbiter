@@ -236,3 +236,4 @@
 - **Funding:** real FUNDED comes from Phase 5; Phase 4's demo uses the local CLI script `web/scripts/dev-fund-milestone.ts`, which Phase 6 deletes. Phase 6 runs the full flow: fund → submit → verify → report → approve.
 - **Payment guard:** Phase 5's guard reads "the latest run has no FAIL" from the `check_results` of the latest completed run of the latest live submission. Phase 6 wires it to Phase 4's `report.ts` read model, through `latestVerdicts(milestoneId)` (exported here).
 - **Also:** the DISPUTED path (the Disagree button) and seeding submitted runs into the demo.
+- **Test workers (user, 8 Nov):** on an 8 GB machine the full Vitest suite with default parallelism timed out 1–3 different PGlite-backed tests per run (each passes alone); with `--maxWorkers=2` all 330 passed. Phase 6 should cap Vitest workers in the test script for low-memory machines and in CI. Shared config was not changed in Phase 4.
