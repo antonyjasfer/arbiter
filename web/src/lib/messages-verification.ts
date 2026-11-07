@@ -18,6 +18,14 @@ export const VERIFICATION_ERROR_TEXT: Record<string, string> = {
   deadline_exceeded: "The verification run took longer than 25 minutes and was stopped.",
   unexpected_artifacts: "The run's results were tampered with (an unexpected or missing results artifact), so no verdict was written.",
   bad_results: "The run's results file was invalid or belonged to another run, so no verdict was written.",
+  runner_error: "The verification runner itself failed (not the submitted code), so no verdict was written. Run verification again.",
+};
+
+// FAILs caused by the deployed site, with what the freelancer should do (user decision, 8 Nov).
+export const SITE_FAIL_TEXT: Record<string, string> = {
+  site_unreachable: "Site didn't respond within 90 s; fix the deploy and resubmit.",
+  budget_exhausted: "The site was too slow for the checks to finish in time; fix the deploy and resubmit.",
+  timeout: "A step timed out on the deployed site; fix the deploy and resubmit.",
 };
 
 // Browser and test step reason codes from results.json and the Jobs API -> text for the report.
@@ -32,8 +40,8 @@ export const STEP_REASON_TEXT: Record<string, string> = {
   not_json: "the response was not JSON",
   not_checked: "not checked",
   origin_mismatch: "redirected to another site",
-  budget_exhausted: "ran out of time",
-  site_unreachable: "the site did not respond within 90 seconds",
+  budget_exhausted: "the checks ran out of time on the deployed site",
+  site_unreachable: "the site didn't respond within 90 s",
   error: "the check could not run",
   results_missing: "the browser results were not uploaded",
   plan_invalid: "the runner rejected the check plan",

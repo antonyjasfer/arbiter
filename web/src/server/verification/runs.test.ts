@@ -340,14 +340,22 @@ describe("runStep", () => {
     expect(await runRow(id)).toMatchObject({ status: "errored", errorCode: "unexpected_artifacts" });
   });
 
-  it("results whose upload step failed make browser criteria NEEDS HUMAN REVIEW and still finish", async () => {
+  it("no results because the upload step failed: the run is errored (runner_error), no verdicts", async () => {
     const runner = fakeRunner();
     const id = await dispatchedAndFound(runner);
     await completeWith(runner, id, { artifacts: [], jobs: doneJobs({ upload: "failure" }) });
-    expect((await runRow(id)).status).toBe("completed");
-    const results = await db().select().from(s.checkResults).where(eq(s.checkResults.runId, id));
-    const m1c1 = results.find((r) => r.criterionId === f.criteria.find((c) => c.key === "m1c1")!.id)!;
-    expect(m1c1.verdict).toBe("needs_review");
+    expect(await runRow(id)).toMatchObject({ status: "errored", errorCode: "runner_error" });
+    expect(await db().select().from(s.checkResults).where(eq(s.checkResults.runId, id))).toHaveLength(0);
+    expect((await milestone()).state).toBe("SUBMITTED");
+  });
+
+  it("a runner infrastructure failure (Playwright install) errors the run even with a results artifact", async () => {
+    const runner = fakeRunner();
+    const id = await dispatchedAndFound(runner);
+    const js = doneJobs().map((j) => (j.name === "browser" ? { ...j, conclusion: "failure", steps: [{ number: 1, name: "install playwright", status: "completed", conclusion: "failure" }, ...j.steps] } : j));
+    await completeWith(runner, id, { jobs: js });
+    expect(await runRow(id)).toMatchObject({ status: "errored", errorCode: "runner_error" });
+    expect(runner.downloads).toBe(0);
   });
 
   it("results for another plan or another run name are refused (bad_results)", async () => {

@@ -1,7 +1,7 @@
 import { ExternalLink, ShieldAlert } from "lucide-react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { Tone } from "@/lib/format";
-import { STEP_REASON_TEXT } from "@/lib/messages-verification";
+import { SITE_FAIL_TEXT, STEP_REASON_TEXT } from "@/lib/messages-verification";
 import type { Report, ReportCriterion, VerdictSource } from "@/server/verification/report";
 
 const VERDICT: Record<ReportCriterion["verdict"], { label: string; tone: Tone }> = {
@@ -88,11 +88,15 @@ function CriterionCard({ c }: { c: ReportCriterion }) {
               </li>
             ))}
           </ol>
-        ) : d.reason ? (
+        ) : d.reason && !(c.verdict === "fail" && SITE_FAIL_TEXT[d.reason]) ? (
           <p className="text-sm">Not decided by a check: {reason(d.reason)}{d.why ? ` (${reason(d.why)})` : null}.</p>
         ) : null
       ) : null}
-      {c.kind === "browser" && d.reason && d.steps?.length ? <p className="text-sm text-muted-foreground">Result: {reason(d.reason)}</p> : null}
+      {c.kind === "browser" && c.verdict === "fail" && d.reason && SITE_FAIL_TEXT[d.reason] ? (
+        <p className="text-sm text-status-fail">{SITE_FAIL_TEXT[d.reason]}</p>
+      ) : c.kind === "browser" && d.reason && d.steps?.length ? (
+        <p className="text-sm text-muted-foreground">Result: {reason(d.reason)}</p>
+      ) : null}
 
       {shots.length ? (
         <div className="flex flex-wrap gap-3">

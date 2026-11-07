@@ -13,10 +13,7 @@ export const UPLOAD_STEP = "upload results";
 
 export type Verdict = "pass" | "fail" | "needs_review";
 
-export type ArtifactCheck =
-  | { kind: "accepted"; artifact: Artifact }
-  | { kind: "missing"; reason: "upload_failed" | "expired" }
-  | { kind: "rejected"; error_code: "unexpected_artifacts"; detail: string };
+export type ArtifactCheck = { kind: "accepted"; artifact: Artifact } | { kind: "rejected"; error_code: "unexpected_artifacts" | "runner_error"; detail: string };
 
 const at = (s: string | null | undefined) => (s ? Date.parse(s) : NaN);
 
@@ -39,7 +36,8 @@ export function checkArtifacts(jobs: Job[], artifacts: Artifact[]): ArtifactChec
   if (named.length === 0) {
     // verify.yml uploads with if-no-files-found: error, so a successful upload step means the artifact existed.
     if (upload?.conclusion === "success") return reject(`${RESULTS_ARTIFACT} was uploaded but is gone`);
-    return { kind: "missing", reason: "upload_failed" };
+    // No results and no successful upload: the trusted job broke (user decision, 8 Nov: errored, never a verdict).
+    return { kind: "rejected", error_code: "runner_error", detail: `no ${RESULTS_ARTIFACT}: ${firstFailedStep(browser) ?? "the browser job did not upload results"}` };
   }
 
   const a = named[0]!;
@@ -49,8 +47,38 @@ export function checkArtifacts(jobs: Job[], artifacts: Artifact[]): ArtifactChec
   const testsStarted = at(tests?.startedAt);
   // Timestamps are whole seconds, so "at the same second" counts as after: reject rather than guess.
   if (!Number.isNaN(testsStarted) && created >= testsStarted) return reject(`${RESULTS_ARTIFACT} was created after the tests job started`);
-  if (a.expired) return { kind: "missing", reason: "expired" };
+  if (a.expired) return { kind: "rejected", error_code: "runner_error", detail: `${RESULTS_ARTIFACT} has expired` };
   return { kind: "accepted", artifact: a };
+}
+
+function firstFailedStep(job: Job | undefined): string | null {
+  const s = job?.steps.find((x) => x.conclusion !== null && x.conclusion !== "success" && x.conclusion !== "skipped");
+  return s ? `${job!.name} step "${s.name.slice(0, 60)}" ${s.conclusion}` : null;
+}
+
+// The browser job's steps before the plan runs: Arbiter's own setup, which no freelancer code touches.
+const TRUSTED_SETUP_STEPS = new Set(["Set up job", "fetch interpreter", "install playwright", "allow chromium sandbox"]);
+
+/**
+ * Runner infrastructure failures make the run errored (error_code runner_error), never a FAIL: the validate
+ * job failing, any job missing, GitHub's "Set up job" failing, or the browser job's own setup (fetching the
+ * interpreter, installing Playwright) failing. The freelancer's npm ci / npm test failing, or the tests job
+ * hitting its 10-minute timeout, are verdicts, not infrastructure. Call once the run has completed.
+ */
+export function checkInfrastructure(jobs: Job[]): { error_code: "runner_error"; detail: string } | null {
+  const err = (detail: string) => ({ error_code: "runner_error" as const, detail });
+  const validate = jobs.find((j) => j.name === "validate");
+  const browser = jobs.find((j) => j.name === BROWSER_JOB);
+  const tests = jobs.find((j) => j.name === TESTS_JOB);
+  if (!validate || !browser || !tests) return err(`missing job(s): ${["validate", BROWSER_JOB, TESTS_JOB].filter((n) => !jobs.some((j) => j.name === n)).join(", ")}`);
+  if (validate.conclusion !== "success") return err(`validate job ${validate.conclusion ?? "did not finish"}`);
+  for (const job of [browser, tests]) {
+    const setup = job.steps.find((s) => s.name === "Set up job");
+    if (setup && setup.conclusion !== "success") return err(`${job.name} step "Set up job" ${setup.conclusion ?? "did not finish"}`);
+  }
+  const broken = browser.steps.find((s) => TRUSTED_SETUP_STEPS.has(s.name) && s.conclusion !== "success");
+  if (broken) return err(`${BROWSER_JOB} step "${broken.name}" ${broken.conclusion ?? "did not finish"}`);
+  return null;
 }
 
 export type StaticStepOutcome = { index: number; status: "pass" | "fail" | "skipped" };

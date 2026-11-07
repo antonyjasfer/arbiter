@@ -26,7 +26,7 @@ import { reviewRun } from "./reviewer";
 import { loadCriteria, planChecks, type PlanError } from "./planner";
 import type { Job, RunnerClient } from "./runner-client";
 import { checkRepoUrl, milestoneProject } from "./submissions";
-import { checkArtifacts, computeVerdicts, evaluateStatic, staticPaths, type CriterionVerdict, type ResultsInput, type StaticEvaluation } from "./verdicts";
+import { checkArtifacts, checkInfrastructure, computeVerdicts, evaluateStatic, staticPaths, type CriterionVerdict, type ResultsInput, type StaticEvaluation } from "./verdicts";
 
 export const LEASE_MS = 240_000;
 export const POLL_MS = 15_000;
@@ -41,7 +41,7 @@ export const DEADLINE_MS = 25 * 60_000;
 
 type Run = typeof verificationRuns.$inferSelect;
 export type StartError = "not_found" | "forbidden" | "wrong_state" | "conflict" | "repo_not_public" | "github_error" | PlanError;
-export type RunErrorCode = "dispatch_failed" | "run_not_found" | "deadline_exceeded" | "unexpected_artifacts" | "bad_results";
+export type RunErrorCode = "dispatch_failed" | "run_not_found" | "deadline_exceeded" | "unexpected_artifacts" | "runner_error" | "bad_results";
 
 /** SUBMITTED -> VERIFYING for the milestone's live submission. Any project member may start it. */
 export async function startVerification(
@@ -221,13 +221,15 @@ async function advance(db: Db, runner: RunnerClient, run: Run, now: Date): Promi
   const jobs = await runner.getJobs(runId);
   const artifacts = await runner.listArtifacts(runId);
   if (!jobs.ok || !artifacts.ok) return overdue ? errorRun(db, run, "deadline_exceeded", "GitHub unavailable", now) : void (await later());
+  // Tampering first (the more serious finding), then runner infrastructure failures: both error the run.
   const check = checkArtifacts(jobs.value, artifacts.value);
   if (check.kind === "rejected") return errorRun(db, run, check.error_code, check.detail, now);
+  const infra = checkInfrastructure(jobs.value);
+  if (infra) return errorRun(db, run, infra.error_code, infra.detail, now);
 
   let results: ResultsInput;
   let artifactFiles: Record<string, Uint8Array> = {};
-  if (check.kind === "missing") results = check;
-  else {
+  {
     const files = await runner.downloadArtifact(runId, check.artifact.id);
     if (!files.ok) {
       if (TRANSIENT.has(files.error) && !overdue) return void (await later());

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CheckPlan, Results } from "./plan-dsl";
 import type { Artifact, Job } from "./runner-client";
-import { checkArtifacts, computeVerdicts, evaluateStatic, UPLOAD_STEP } from "./verdicts";
+import { checkArtifacts, checkInfrastructure, computeVerdicts, evaluateStatic, UPLOAD_STEP } from "./verdicts";
 
 // Shapes as the Jobs and Artifacts APIs returned them in the Phase 4 smoke run (2026-11-07).
 const step = (number: number, name: string, conclusion: string | null = "success") => ({ number, name, status: "completed", conclusion });
@@ -65,19 +65,49 @@ describe("checkArtifacts", () => {
     expect(checkArtifacts(jobs({ upload: "success" }), [])).toMatchObject({ kind: "rejected", error_code: "unexpected_artifacts" });
   });
 
-  it("treats results as missing (not tampering) when the upload step itself did not succeed", () => {
+  // User decision, 8 Nov: missing results are a runner failure (errored run), never NEEDS HUMAN REVIEW.
+  it("errors the run (runner_error) when the upload step itself did not succeed", () => {
     for (const upload of ["failure", "skipped", "cancelled", null]) {
-      expect(checkArtifacts(jobs({ browser: "failure", upload }), [])).toEqual({ kind: "missing", reason: "upload_failed" });
+      expect(checkArtifacts(jobs({ browser: "failure", upload }), [])).toMatchObject({ kind: "rejected", error_code: "runner_error" });
     }
   });
 
-  it("treats results as missing when the browser job has no upload step at all", () => {
+  it("errors the run (runner_error) when the browser job has no upload step at all", () => {
     const js = jobs().map((j) => (j.name === "browser" ? { ...j, conclusion: "failure", steps: j.steps.slice(0, 2) } : j));
-    expect(checkArtifacts(js, [])).toEqual({ kind: "missing", reason: "upload_failed" });
+    expect(checkArtifacts(js, [])).toMatchObject({ kind: "rejected", error_code: "runner_error" });
   });
 
-  it("treats an expired results artifact as missing", () => {
-    expect(checkArtifacts(jobs(), [art(10, "arbiter-results", "2026-11-07T13:04:33Z", true)])).toEqual({ kind: "missing", reason: "expired" });
+  it("errors the run (runner_error) when the results artifact has expired", () => {
+    expect(checkArtifacts(jobs(), [art(10, "arbiter-results", "2026-11-07T13:04:33Z", true)])).toMatchObject({ kind: "rejected", error_code: "runner_error" });
+  });
+});
+
+describe("checkInfrastructure (user decision, 8 Nov: runner failures error the run, never FAIL)", () => {
+  const withStep = (job: string, name: string, conclusion: string) =>
+    jobs().map((j) => (j.name === job ? { ...j, conclusion: "failure", steps: j.steps.map((s) => (s.name === name ? { ...s, conclusion } : s)) } : j));
+
+  it("passes a healthy run", () => {
+    expect(checkInfrastructure(jobs())).toBeNull();
+  });
+
+  it("a Playwright install failure is a runner error", () => {
+    expect(checkInfrastructure(withStep("browser", "install playwright", "failure"))).toMatchObject({ error_code: "runner_error", detail: expect.stringContaining("install playwright") });
+  });
+
+  it("a missing interpreter (the fetch step failed) is a runner error", () => {
+    expect(checkInfrastructure(withStep("browser", "fetch interpreter", "failure"))).toMatchObject({ error_code: "runner_error", detail: expect.stringContaining("fetch interpreter") });
+  });
+
+  it("a GitHub Actions error is a runner error: a failed Set up job, a failed validate job, or no jobs at all", () => {
+    expect(checkInfrastructure(withStep("tests", "Set up job", "failure"))).toMatchObject({ error_code: "runner_error" });
+    expect(checkInfrastructure(jobs().map((j) => (j.name === "validate" ? { ...j, conclusion: "failure" } : j)))).toMatchObject({ error_code: "runner_error", detail: expect.stringContaining("validate") });
+    expect(checkInfrastructure([])).toMatchObject({ error_code: "runner_error" });
+  });
+
+  it("the freelancer's own failures are not runner errors: npm ci / npm test failing, or the tests job timing out", () => {
+    expect(checkInfrastructure(withStep("tests", "npm test", "failure"))).toBeNull();
+    expect(checkInfrastructure(withStep("tests", "npm ci", "failure"))).toBeNull();
+    expect(checkInfrastructure(withStep("tests", "npm test", "cancelled"))).toBeNull();
   });
 });
 
