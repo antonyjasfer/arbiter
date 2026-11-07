@@ -30,7 +30,7 @@ function fakeAi(reply: PlannerOutput | AiFailure = good): StructuredAi & { calls
   const ai = {
     model: "fake-model",
     calls: 0,
-    async generate<T>(_req: AiRequest<T>): Promise<AiSuccess<T> | AiFailure> {
+    async generate<T>(): Promise<AiSuccess<T> | AiFailure> {
       ai.calls++;
       return "ok" in reply ? reply : ({ ok: true, data: reply as unknown as T, model: "fake-model", cached: false, usage: { inputTokens: 1, outputTokens: 1 } } as AiSuccess<T>);
     },

@@ -21,6 +21,8 @@ export type ReportCriterion = {
   detail: unknown;
   aiSummary: string | null;
   evidence: ReportEvidence[];
+  /** The checks Arbiter ran for this criterion (DSL steps from the run's plan). */
+  steps: Record<string, unknown>[];
 };
 export type Report = {
   projectId: string;
@@ -127,6 +129,7 @@ export async function getReport(db: Db, args: { userId: string; milestoneId: str
         detail: r.detail,
         aiSummary: r.aiSummary,
         evidence: ev.filter((e) => e.checkResultId === r.id).map(toEv),
+        steps: ((run.plan as Record<string, { steps?: Record<string, unknown>[] }> | null)?.[key]?.steps ?? []).slice(0, 15),
       };
     })
     .sort((a, b) => a.key.localeCompare(b.key, "en", { numeric: true }));
