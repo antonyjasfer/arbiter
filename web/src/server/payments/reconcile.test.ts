@@ -76,6 +76,25 @@ describe("reconcilePayment (poll and page view)", () => {
     expect(pp.count("getCapture")).toBe(2);
   });
 
+  it("review I2: an APPROVED milestone whose capture call failed is captured by the next poll, once, with the same request id", async () => {
+    pp.failNext("captureAuthorization", new Error("network timeout"));
+    expect(await approveRelease(db(), pp.api, { userId: f.client, milestoneId: m1, latestVerdicts: allPass })).toMatchObject({ ok: false });
+    expect((await milestoneRow(db(), m1)).state).toBe("APPROVED");
+    expect(await poll(f.freelancer)).toMatchObject({ ok: true, value: { state: "PAID" } });
+    const captures = pp.calls.filter((c) => c.op === "captureAuthorization");
+    expect(captures).toHaveLength(2);
+    expect(captures[0]!.requestId).toBe(captures[1]!.requestId);
+    expect(pp.captures.size).toBe(1);
+    expect(pp.batches.size).toBe(1);
+  });
+
+  it("a DECLINED capture is not retried by polling", async () => {
+    pp.setNextCaptureStatus("DECLINED");
+    await approveRelease(db(), pp.api, { userId: f.client, milestoneId: m1, latestVerdicts: allPass });
+    expect(await poll(f.client)).toMatchObject({ ok: true, value: { state: "APPROVED", paymentStatus: "capture_denied" } });
+    expect(pp.count("captureAuthorization")).toBe(1);
+  });
+
   it("a failed payout is not retried by polling", async () => {
     pp.setNextPayoutItemStatus("FAILED");
     await approveRelease(db(), pp.api, { userId: f.client, milestoneId: m1, latestVerdicts: allPass });

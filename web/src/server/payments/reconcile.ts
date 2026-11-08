@@ -11,7 +11,7 @@ import type { MilestoneState } from "../milestones/state-machine";
 import { loadMilestone, milestoneForRole } from "./context";
 import { PaypalApiError, type PaypalApi } from "./paypal-api";
 import { reconcileAuthorization } from "./lost-authorization";
-import { CAPTURE_REFUNDED, PAYOUT_STOPPED, reconcileCapture, reconcilePayout, sendPayout } from "./release";
+import { CAPTURE_REFUNDED, captureApproved, PAYOUT_STOPPED, reconcileCapture, reconcilePayout, sendPayout } from "./release";
 
 export const RECONCILE_EVERY_MS = 30_000;
 // States where the payment is an uncaptured PayPal hold.
@@ -59,6 +59,22 @@ async function claimRound(db: Db, paymentId: string, now: Date): Promise<boolean
 
 /** One reconcile round. Returns an error code, or null. */
 async function advance(db: Db, api: PaypalApi, paymentId: string, state: MilestoneState): Promise<string | null> {
+  if (HOLD_STATES.has(state)) {
+    // Before a capture, the hold itself can be lost (expired or voided outside Arbiter).
+    const r = await reconcileAuthorization(db, api, paymentId);
+    if (!r.ok) return r.error;
+    state = r.value.state;
+  }
+  if (state === "APPROVED") {
+    // The client's approval is recorded but the capture call failed or timed out (review I2). Retry it with
+    // the stored request id, so PayPal replays a capture it already made instead of capturing twice.
+    // Only while the row is still "approved": a denied capture or a lost hold is left for a human.
+    const [p] = await db.select({ status: payments.status }).from(payments).where(eq(payments.id, paymentId));
+    if (p?.status !== "approved") return null;
+    const r = await captureApproved(db, api, paymentId);
+    if (!r.ok) return r.error;
+    state = r.value.state;
+  }
   if (state === "CAPTURE_PENDING") {
     const r = await reconcileCapture(db, api, paymentId);
     if (!r.ok) return r.error;
@@ -70,11 +86,6 @@ async function advance(db: Db, api: PaypalApi, paymentId: string, state: Milesto
     // A refused, failed or unknown payout, or a refunded capture, is left for a human; polling never retries it.
     if (!p.payoutBatchId && (PAYOUT_STOPPED.has(p.status) || (p.captureStatus !== null && CAPTURE_REFUNDED.has(p.captureStatus)))) return null;
     const r = p.payoutBatchId ? await reconcilePayout(db, api, paymentId) : await sendPayout(db, api, paymentId);
-    return r.ok ? null : r.error;
-  }
-  if (HOLD_STATES.has(state)) {
-    // Before a capture, the hold itself can be lost (expired or voided outside Arbiter).
-    const r = await reconcileAuthorization(db, api, paymentId);
     return r.ok ? null : r.error;
   }
   return null;

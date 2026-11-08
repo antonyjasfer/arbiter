@@ -55,11 +55,14 @@ export const paypalHttp: PaypalHttp = {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
+    // A 401 means PayPal no longer accepts the cached token: drop it so the next call fetches a new one.
+    if (res.status === 401) cached = undefined;
     return { status: res.status, body: await res.json().catch(() => ({})) };
   },
   async get(path) {
     if (!path.startsWith("/")) throw new Error("paypalHttp: bad path");
     const res = await fetch(`${SANDBOX}${path}`, { headers: { Authorization: `Bearer ${await accessToken()}` }, signal: AbortSignal.timeout(30_000) });
+    if (res.status === 401) cached = undefined;
     return { status: res.status, body: await res.json().catch(() => ({})) };
   },
 };

@@ -55,6 +55,16 @@ describe("approveRelease", () => {
     expect(await auditActions(db(), f.projectId)).toContain("capture_denied");
   });
 
+  it("review I3: a DECLINED capture is flagged for a human in the audit log and never retried", async () => {
+    pp.setNextCaptureStatus("DECLINED");
+    await approve();
+    const [row] = await db().select().from(s.auditEvents).where(eq(s.auditEvents.action, "capture_denied"));
+    expect(row!.data).toMatchObject({ status: "DECLINED", needsHuman: true });
+    // Approving again is a no-op that reports the state; it never captures a second time.
+    expect(await approve()).toEqual({ ok: true, value: { state: "APPROVED" } });
+    expect(pp.count("captureAuthorization")).toBe(1);
+  });
+
   it("a guard refusal happens before any PayPal call and records nothing", async () => {
     expect(await approve({ userId: f.freelancer })).toEqual({ ok: false, error: "forbidden" });
     expect(await approve({ latestVerdicts: oneFail })).toEqual({ ok: false, error: "fail_without_override" });
@@ -191,6 +201,16 @@ describe("sendPayout and reconcilePayout", () => {
     expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: true, value: { state: "PAID" } });
     expect(pp.batches.size).toBe(1);
     expect(await auditActions(db(), f.projectId)).not.toContain("payout_failed");
+  });
+
+  it("review I1: a 401 on create-payout (stale token) is temporary, not a permanent failure", async () => {
+    await approve();
+    const p = await live();
+    pp.failNext("createPayout", new PaypalApiError(401, "AUTHENTICATION_FAILURE"));
+    expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: false, error: "paypal_unavailable" });
+    expect((await live()).status).not.toBe("payout_failed");
+    expect(await sendPayout(db(), pp.api, p.id)).toEqual({ ok: true, value: { state: "PAID" } });
+    expect(pp.batches.size).toBe(1);
   });
 
   it("a duplicate-batch answer means PayPal may already have paid: flagged for a human, not 'failed'", async () => {

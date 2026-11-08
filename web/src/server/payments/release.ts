@@ -44,13 +44,14 @@ function paypalFailure(e: unknown): PaypalFailure {
 }
 
 /**
- * How a create-payout error is handled. Temporary (retry later): network errors, 5xx, 429, 409 and
+ * How a create-payout error is handled. Temporary (retry later): network errors, 5xx, 401 (a stale
+ * cached token; the transport drops it so the retry gets a new one), 429, 409 and
  * INSUFFICIENT_FUNDS (a fresh capture may not be spendable yet in sandbox). Unknown (PayPal may already
  * have paid; a human checks the dashboard): any duplicate answer, or a bare USER_BUSINESS_ERROR, which is
  * also how a reused sender_batch_id comes back. Anything else is a permanent refusal.
  */
 function payoutFailure(e: unknown): "temporary" | "unknown" | "refused" {
-  if (!(e instanceof PaypalApiError) || e.status >= 500 || e.status === 429 || e.status === 409 || e.issue === "INSUFFICIENT_FUNDS") return "temporary";
+  if (!(e instanceof PaypalApiError) || e.status >= 500 || e.status === 401 || e.status === 429 || e.status === 409 || e.issue === "INSUFFICIENT_FUNDS") return "temporary";
   if (/DUPLICATE/.test(e.issue) || e.issue === "USER_BUSINESS_ERROR") return "unknown";
   return "refused";
 }
@@ -122,7 +123,7 @@ async function recordApproval(db: Db, userId: string, plan: ReleasePlan): Promis
 }
 
 /** Capture an approved payment (or replay the capture with its stored request id). */
-async function captureApproved(db: Db, api: PaypalApi, paymentId: string): Promise<StateResult<ReleaseError>> {
+export async function captureApproved(db: Db, api: PaypalApi, paymentId: string): Promise<StateResult<ReleaseError>> {
   const p = await paymentById(db, paymentId);
   const m = p && (await loadMilestone(db, p.milestoneId));
   if (!p || !m) return { ok: false, error: "not_found" };
@@ -208,6 +209,8 @@ async function applyCapture(db: Db, paymentId: string, cap: PaypalCapture): Prom
             status: cap.status,
             reason: cap.statusReason,
             ...(action === "capture_refunded" ? { needsHuman: true, payoutSent: p.payoutBatchId !== null } : {}),
+            // A denied capture spends the authorization; nothing retries it and a person must follow up.
+            ...(action === "capture_denied" ? { needsHuman: true } : {}),
           },
         });
       }
