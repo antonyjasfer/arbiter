@@ -94,6 +94,17 @@ describe("buildTimeline", () => {
     expect(t.notice).toBeNull();
   });
 
+  it.each(["REFUNDED", "PARTIALLY_REFUNDED", "REVERSED"])("capture %s (even after payout): a notice for a human, captured step a problem", (captureStatus) => {
+    const t = buildTimeline(
+      payment({ status: "paid", approvedAt: AUTH_AT, captureId: "C1", captureStatus, payoutBatchId: "B1", payoutItemId: "I1", payoutStatus: "SUCCESS" }),
+      "PAID",
+      AUTH_AT,
+    );
+    expect(t.steps[2]).toMatchObject({ status: "problem", paypalStatus: captureStatus });
+    expect(t.steps[3]!.status).toBe("done");
+    expect(t.notice).toMatchObject({ kind: "capture_refunded" });
+  });
+
   it("capture denied: captured step is a problem", () => {
     const t = buildTimeline(payment({ status: "capture_denied", approvedAt: AUTH_AT, captureId: "C1", captureStatus: "DECLINED" }), "APPROVED", AUTH_AT);
     expect(t.steps[2]!.status).toBe("problem");

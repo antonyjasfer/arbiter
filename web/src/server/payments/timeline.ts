@@ -37,6 +37,7 @@ export type TimelineNotice =
   | { kind: "honor_period_over"; expiresAt: Date }
   | { kind: "capture_pending" }
   | { kind: "capture_denied" }
+  | { kind: "capture_refunded" }
   | { kind: "payout_failed" }
   | { kind: "payout_unknown" }
   | { kind: "refund_needed" }
@@ -52,12 +53,16 @@ export type PaymentTimeline = {
   refundNeeded: boolean;
 };
 
-const PRE_CAPTURE = new Set<MilestoneState>(["FUNDED", "SUBMITTED", "VERIFYING", "REPORT_READY", "DISPUTED", "APPROVED"]);
+// Same set as release.ts CAPTURE_REFUNDED, copied so this pure read model doesn't import release.ts (DB, PayPal).
+const REFUNDED = new Set(["REFUNDED", "PARTIALLY_REFUNDED", "REVERSED"]);
+const PRE_CAPTURE =new Set<MilestoneState>(["FUNDED", "SUBMITTED", "VERIFYING", "REPORT_READY", "DISPUTED", "APPROVED"]);
 
 export function buildTimeline(p: TimelineInput, state: MilestoneState, now: Date): PaymentTimeline {
   const lost = p.status === "authorization_lost";
   const voided = p.status === "voided" || state === "CANCELLED";
   const denied = p.status === "capture_denied";
+  // Read from the capture's own status: after a payout the row's status belongs to the payout.
+  const refunded = p.captureStatus !== null && REFUNDED.has(p.captureStatus);
   const payoutStopped = p.status === "payout_failed" || p.status === "payout_unknown";
   const captured = p.captureStatus === "COMPLETED";
   const paid = state === "PAID" || p.status === "paid";
@@ -74,7 +79,7 @@ export function buildTimeline(p: TimelineInput, state: MilestoneState, now: Date
     { key: "approved", status: voided ? "waiting" : p.approvedAt ? "done" : "waiting", paypalId: null, paypalStatus: null },
     {
       key: "captured",
-      status: denied ? "problem" : captured ? "done" : p.captureId ? "current" : "waiting",
+      status: denied || refunded ? "problem" : captured ? "done" : p.captureId ? "current" : "waiting",
       paypalId: p.captureId,
       paypalStatus: p.captureStatus,
     },
@@ -99,6 +104,7 @@ function notice(p: TimelineInput, state: MilestoneState, now: Date, f: { lost: b
   if (f.lost) return { kind: "refund_needed" };
   if (f.voided) return { kind: "voided" };
   if (f.denied) return { kind: "capture_denied" };
+  if (p.captureStatus !== null && REFUNDED.has(p.captureStatus)) return { kind: "capture_refunded" };
   if (p.status === "payout_failed" || p.status === "payout_unknown") return { kind: p.status };
   if (state === "CAPTURE_PENDING") return { kind: "capture_pending" };
   if (PRE_CAPTURE.has(state) && p.authorizationExpiresAt && p.honorPeriodEndsAt) {

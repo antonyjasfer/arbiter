@@ -140,3 +140,36 @@ describe("getPayoutBatch", () => {
     expect(r).toEqual({ batchId: "BATCH1", batchStatus: "SUCCESS", items: [{ itemId: "ITEM1", status: "SUCCESS" }] });
   });
 });
+
+describe("getRefund", () => {
+  it("reads a refund and finds its capture from the 'up' link", async () => {
+    const { h, calls } = http([
+      {
+        status: 200,
+        body: {
+          id: "REF1",
+          status: "COMPLETED",
+          links: [
+            { href: "https://api.sandbox.paypal.com/v2/payments/refunds/REF1", rel: "self", method: "GET" },
+            { href: "https://api.sandbox.paypal.com/v2/payments/captures/CAP1", rel: "up", method: "GET" },
+          ],
+        },
+      },
+    ]);
+    expect(await createPaypalApi(h).getRefund("REF1")).toEqual({ id: "REF1", status: "COMPLETED", captureId: "CAP1" });
+    expect(calls[0]).toEqual({ method: "GET", path: "/v2/payments/refunds/REF1" });
+  });
+
+  it("returns a null capture id when no 'up' link names a capture", async () => {
+    const { h } = http([{ status: 200, body: { id: "REF1", status: "COMPLETED", links: [{ href: "https://evil.example/v2/payments/captures/../x", rel: "up" }] } }]);
+    expect((await createPaypalApi(h).getRefund("REF1")).captureId).toBeNull();
+  });
+});
+
+describe("getPayoutItem", () => {
+  it("reads a payout item and its batch id", async () => {
+    const { h, calls } = http([{ status: 200, body: { payout_item_id: "ITEM1", transaction_status: "SUCCESS", payout_batch_id: "BATCH1" } }]);
+    expect(await createPaypalApi(h).getPayoutItem("ITEM1")).toEqual({ itemId: "ITEM1", batchId: "BATCH1", status: "SUCCESS" });
+    expect(calls[0]).toEqual({ method: "GET", path: "/v1/payments/payouts-item/ITEM1" });
+  });
+});

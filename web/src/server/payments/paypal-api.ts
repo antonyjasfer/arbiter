@@ -26,6 +26,8 @@ export type PaypalOrder = { id: string; status: string };
 export type PaypalAuthorization = { id: string; status: string; amountCents: number; currency: string; createTime: Date | null; expirationTime: Date | null };
 export type PaypalCapture = { id: string; status: string; statusReason: string | null; amountCents: number | null; currency: string | null };
 export type PaypalPayoutBatch = { batchId: string; batchStatus: string; items: { itemId: string; status: string | null }[] };
+export type PaypalRefund = { id: string; status: string; captureId: string | null };
+export type PaypalPayoutItem = { itemId: string; batchId: string; status: string | null };
 
 const PAYPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
 const money = z.object({ currency_code: z.string(), value: z.string() });
@@ -52,6 +54,15 @@ const payoutHeaderSchema = z.object({ batch_header: z.object({ payout_batch_id: 
 const payoutBatchSchema = payoutHeaderSchema.extend({
   items: z.array(z.object({ payout_item_id: z.string().regex(PAYPAL_ID), transaction_status: z.string().optional() })).optional(),
 });
+// Payments v2 "Show refund details": the refund's HATEOAS links include rel "up" pointing at its capture.
+const refundSchema = z.object({
+  id: z.string().regex(PAYPAL_ID),
+  status: z.string(),
+  links: z.array(z.object({ href: z.string(), rel: z.string() })).optional(),
+});
+const CAPTURE_LINK = /\/v2\/payments\/captures\/([A-Za-z0-9-]{1,64})$/;
+// Payouts v1 "Show payout item details".
+const payoutItemSchema = z.object({ payout_item_id: z.string().regex(PAYPAL_ID), payout_batch_id: z.string().regex(PAYPAL_ID), transaction_status: z.string().optional() });
 const errorSchema = z.object({ name: z.string().optional(), details: z.array(z.object({ issue: z.string().optional() })).optional() });
 
 function checkId(id: string): string {
@@ -145,6 +156,20 @@ export function createPaypalApi(http: PaypalHttp) {
       };
       const h = parse(payoutHeaderSchema, ensureOk(await http.post("/v1/payments/payouts", body, { requestId: args.requestId })), "payout");
       return { batchId: h.batch_header.payout_batch_id, batchStatus: h.batch_header.batch_status };
+    },
+
+    /** Read-only. A PAYMENT.CAPTURE.REFUNDED or REVERSED event may carry a refund; this finds its capture. */
+    async getRefund(refundId: string): Promise<PaypalRefund> {
+      const r = parse(refundSchema, ensureOk(await http.get(`/v2/payments/refunds/${checkId(refundId)}`)), "refund");
+      const up = r.links?.find((l) => l.rel === "up");
+      const m = up ? CAPTURE_LINK.exec(up.href) : null;
+      return { id: r.id, status: r.status, captureId: m ? m[1]! : null };
+    },
+
+    /** Read-only. A PAYMENT.PAYOUTS-ITEM.* event names the item; this finds its batch. */
+    async getPayoutItem(itemId: string): Promise<PaypalPayoutItem> {
+      const i = parse(payoutItemSchema, ensureOk(await http.get(`/v1/payments/payouts-item/${checkId(itemId)}`)), "payout item");
+      return { itemId: i.payout_item_id, batchId: i.payout_batch_id, status: i.transaction_status ?? null };
     },
 
     async getPayoutBatch(batchId: string): Promise<PaypalPayoutBatch> {

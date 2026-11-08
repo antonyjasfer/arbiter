@@ -2,7 +2,7 @@
 // something. A request id that was seen before returns the original result; a second authorize of one
 // order with a new request id is refused with 422 ORDER_ALREADY_AUTHORIZED, as PayPal does; a second
 // capture of one authorization and a reused sender_batch_id are refused the same way.
-import { PaypalApiError, type PaypalApi, type PaypalAuthorization, type PaypalCapture, type PaypalOrder, type PaypalPayoutBatch } from "./paypal-api";
+import { PaypalApiError, type PaypalApi, type PaypalAuthorization, type PaypalCapture, type PaypalOrder, type PaypalPayoutBatch, type PaypalRefund } from "./paypal-api";
 
 type Order = { id: string; status: string; amountCents: number; referenceId: string; customId: string };
 
@@ -16,6 +16,7 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
   const authorizations = new Map<string, PaypalAuthorization & { orderId: string }>();
   const captures = new Map<string, PaypalCapture & { authorizationId: string }>();
   const batches = new Map<string, PaypalPayoutBatch & { senderBatchId: string; receiver: string; amountCents: number }>();
+  const refunds = new Map<string, PaypalRefund>();
   const byRequestId = new Map<string, unknown>();
   const calls: { op: string; requestId?: string; id?: string }[] = [];
   const failNext = new Map<string, Error>();
@@ -112,6 +113,17 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
         return { batchId: b.batchId, batchStatus: b.batchStatus };
       });
     },
+    async getRefund(refundId) {
+      return read("getRefund", refundId, refunds);
+    },
+    async getPayoutItem(itemId) {
+      calls.push({ op: "getPayoutItem", id: itemId });
+      for (const b of batches.values()) {
+        const i = b.items.find((x) => x.itemId === itemId);
+        if (i) return { itemId, batchId: b.batchId, status: i.status };
+      }
+      throw new PaypalApiError(404, "RESOURCE_NOT_FOUND");
+    },
     async getPayoutBatch(batchId) {
       const { senderBatchId: _s, receiver: _r, amountCents: _c, ...b } = read("getPayoutBatch", batchId, batches);
       return b;
@@ -141,6 +153,15 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
       const c = captures.get(captureId);
       if (!c) throw new Error("fake: no such capture");
       c.status = status;
+    },
+    /** The merchant refunds, or PayPal reverses, an existing capture: returns the refund id. */
+    refundCapture(captureId: string, captureStatus = "REFUNDED"): string {
+      const c = captures.get(captureId);
+      if (!c) throw new Error("fake: no such capture");
+      c.status = captureStatus;
+      const id = nextId("REF");
+      refunds.set(id, { id, status: "COMPLETED", captureId });
+      return id;
     },
     setNextPayoutItemStatus(status: string) {
       nextPayoutItemStatus = status;

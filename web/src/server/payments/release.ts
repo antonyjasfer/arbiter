@@ -32,6 +32,11 @@ type StateResult<E> = Result<{ state: MilestoneState }, E>;
 const FAILED_PAYOUT = new Set(["FAILED", "RETURNED", "BLOCKED", "REFUNDED", "REVERSED", "DENIED", "CANCELED"]);
 /** Payout row statuses that polling never retries: a human decides. */
 export const PAYOUT_STOPPED = new Set(["payout_failed", "payout_unknown"]);
+/**
+ * A capture the merchant refunded or PayPal reversed (Payments v2 capture statuses, plus REVERSED in case a
+ * reversal is reported on the capture itself). Flagged for a human: Arbiter never claws a payout back.
+ */
+export const CAPTURE_REFUNDED = new Set(["REFUNDED", "PARTIALLY_REFUNDED", "REVERSED"]);
 const LOST_RACE = "lost_race";
 
 function paypalFailure(e: unknown): PaypalFailure {
@@ -147,7 +152,7 @@ function captureAudit(status: string): AuditAction | null {
   if (status === "COMPLETED") return "capture_completed";
   if (status === "PENDING") return "capture_pending";
   if (status === "DECLINED" || status === "FAILED") return "capture_denied";
-  // REFUNDED / PARTIALLY_REFUNDED: flagged for a human in Task 6 (no automatic clawback).
+  if (CAPTURE_REFUNDED.has(status)) return "capture_refunded";
   return null;
 }
 
@@ -156,7 +161,7 @@ function captureRowStatus(p: PaymentRow, status: string): string {
   if (status === "COMPLETED") return "captured";
   if (status === "PENDING") return "capture_pending";
   if (status === "DECLINED" || status === "FAILED") return "capture_denied";
-  if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "capture_refunded";
+  if (CAPTURE_REFUNDED.has(status)) return "capture_refunded";
   return p.status;
 }
 
@@ -196,7 +201,14 @@ async function applyCapture(db: Db, paymentId: string, cap: PaypalCapture): Prom
           projectId: m.projectId,
           actorId: null,
           action,
-          data: { milestoneId: m.id, paymentId: p.id, captureId: cap.id, status: cap.status, reason: cap.statusReason },
+          data: {
+            milestoneId: m.id,
+            paymentId: p.id,
+            captureId: cap.id,
+            status: cap.status,
+            reason: cap.statusReason,
+            ...(action === "capture_refunded" ? { needsHuman: true, payoutSent: p.payoutBatchId !== null } : {}),
+          },
         });
       }
       return { ok: true, value: { state } };

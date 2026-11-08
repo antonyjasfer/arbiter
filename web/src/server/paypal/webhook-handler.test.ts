@@ -113,6 +113,50 @@ describe("handlePaypalWebhook", () => {
     expect((await db().select().from(s.webhookEvents))[0]!.reconciledStatus).toBe("PENDING");
   });
 
+  describe("payment reconcile (Phase 5)", () => {
+    function withPayments(outcome: () => Promise<{ outcome: string }>) {
+      const seen: { resourceType: string; resourceId: string }[] = [];
+      const logs: string[] = [];
+      const { d } = deps({
+        reconcilePayment: async (r) => {
+          seen.push(r);
+          return outcome();
+        },
+        log: (l) => logs.push(l),
+      });
+      return { d, seen, logs };
+    }
+
+    it("hands the verified event's resource to the payment reconcile, on new and duplicate deliveries", async () => {
+      const { d, seen } = withPayments(async () => ({ outcome: "reconciled" }));
+      expect((await handlePaypalWebhook(req(), d)).status).toBe(200);
+      expect((await handlePaypalWebhook(req(), d)).status).toBe(200);
+      expect(seen).toEqual([
+        { resourceType: "capture", resourceId: "C9" },
+        { resourceType: "capture", resourceId: "C9" },
+      ]);
+    });
+
+    it("never runs it for an unverified event", async () => {
+      const { d, seen } = withPayments(async () => ({ outcome: "reconciled" }));
+      expect((await handlePaypalWebhook(req(), { ...d, verify: async () => "FAILURE" })).status).toBe(400);
+      expect(seen).toEqual([]);
+    });
+
+    it("answers 500 when PayPal couldn't be read, so PayPal redelivers", async () => {
+      const { d } = withPayments(async () => ({ outcome: "retry" }));
+      expect((await handlePaypalWebhook(req(), d)).status).toBe(500);
+    });
+
+    it("logs a refusal and answers 200 (a redelivery wouldn't change it; the page poll is the backstop)", async () => {
+      const { d, logs } = withPayments(async () => {
+        throw new Error("payment reconcile refused: amount_mismatch");
+      });
+      expect((await handlePaypalWebhook(req(), d)).status).toBe(200);
+      expect(logs.some((l) => l.includes("payment=error") && l.includes("amount_mismatch"))).toBe(true);
+    });
+  });
+
   it("answers 200 to a verified event it cannot use, so PayPal does not retry it for days (review finding 2)", async () => {
     const { d } = deps();
     const body = JSON.stringify({ id: "WH-D1", event_type: "CUSTOMER.DISPUTE.CREATED", resource_type: "dispute", resource: { dispute_id: "PP-D-1" } });

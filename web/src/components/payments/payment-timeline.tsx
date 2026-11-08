@@ -30,6 +30,8 @@ function noticeText(n: TimelineNotice): string | null {
       return "Re-fund needed: PayPal's hold on this milestone expired or was voided, so nothing can be captured. The client must fund it again before approving.";
     case "voided":
       return "The PayPal hold was voided. Nothing was charged.";
+    case "capture_refunded":
+      return "PayPal reports this payment was refunded or reversed. Arbiter never claws back a payout automatically; a person reviews it in PayPal.";
     // Capture pending, denied and payout problems are shown by the live status line above.
     default:
       return null;
