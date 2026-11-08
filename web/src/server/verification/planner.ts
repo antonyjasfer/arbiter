@@ -15,7 +15,10 @@ import { acceptanceCriteria, aiUsage, checkPlans, milestones, users } from "../d
 import { criterionPlanSchema, MAX_STEPS, planHash, type CheckPlan } from "./plan-dsl";
 
 export type Criterion = { key: string; kind: CriterionKind; text: string };
-export type PlanProblem = { key: string; problem: "missing" | "unknown_key" | "duplicate" | "invalid_steps" | "test_kind_not_allowed" | "review_must_stay_review" };
+export type PlanProblem = {
+  key: string;
+  problem: "missing" | "unknown_key" | "duplicate" | "invalid_steps" | "test_kind_not_allowed" | "review_must_stay_review" | "must_check_json_field";
+};
 export type PlanError = "not_found" | "ai_busy" | "ai_error" | "invalid_plan" | "daily_cap" | "demo_cap";
 
 export const PLANNER_SCHEMA_NAME = "ArbiterCheckPlanV1";
@@ -74,6 +77,22 @@ export function saysSuitePasses(text: string): boolean {
  * Runs after Zod. Arbiter-run checks decide behaviour: the freelancer's own suite (`test`) is allowed only
  * for a criterion that literally says the test suite passes, and an agreed review criterion stays review.
  */
+// "GET /health returns HTTP 200 with JSON field ok equal to true": when a criterion names an endpoint, a
+// status and a JSON field with a literal value, the plan must check exactly that. Live 8 Nov a plan for this
+// wording dropped json, so a /health returning {"ok":false} passed. Only this narrow wording is enforced;
+// a plan that checks less than free-text criteria ask for is a known gap (FINDINGS, Phase 4 live checks).
+const JSON_FIELD = /\bGET (\/[^\s?#]*?)\.? returns HTTP (\d{3}) with JSON field ([A-Za-z_][\w-]*) equal to (true|false|null|-?\d+|"[^"]*")(?=[\s.,;]|$)/i;
+
+function checksNamedJsonField(text: string, p: CheckPlan[string]): boolean {
+  const m = JSON_FIELD.exec(text);
+  if (!m) return true;
+  const [, path, status, field, raw] = m;
+  const value: unknown = JSON.parse(raw!.startsWith('"') ? raw! : raw!.toLowerCase());
+  return p.steps.some(
+    (st) => st.op === "http_get" && st.path === path && st.status === Number(status) && st.json !== undefined && Object.hasOwn(st.json, field!) && st.json[field!] === value,
+  );
+}
+
 export function enforceCheckKinds(criteria: Criterion[], plan: CheckPlan): Result<CheckPlan, PlanProblem[]> {
   const problems: PlanProblem[] = [];
   const keys = new Set(criteria.map((c) => c.key));
@@ -82,6 +101,7 @@ export function enforceCheckKinds(criteria: Criterion[], plan: CheckPlan): Resul
     if (!p) problems.push({ key: c.key, problem: "missing" });
     else if (c.kind === "review" && p.kind !== "review") problems.push({ key: c.key, problem: "review_must_stay_review" });
     else if (p.kind === "test" && !saysSuitePasses(c.text)) problems.push({ key: c.key, problem: "test_kind_not_allowed" });
+    else if (!checksNamedJsonField(c.text, p)) problems.push({ key: c.key, problem: "must_check_json_field" });
   }
   for (const k of Object.keys(plan)) if (!keys.has(k)) problems.push({ key: k, problem: "unknown_key" });
   return problems.length ? { ok: false, error: problems } : { ok: true, value: plan };
