@@ -21,6 +21,7 @@ export type TimelineInput = Pick<
   | "amount"
   | "fee"
   | "payoutAmount"
+  | "lastReconciledAt"
 >;
 
 export type StepStatus = "done" | "current" | "waiting" | "problem";
@@ -45,6 +46,8 @@ export type PaymentTimeline = {
   steps: TimelineStep[];
   fee: { amountCents: number; feeCents: number; payoutCents: number };
   notice: TimelineNotice | null;
+  /** When PayPal was last read back for this payment; the step statuses are as of this time. */
+  checkedAt: Date | null;
   /** The hold is gone (expired or voided) after work started: approval is blocked until the client re-funds. */
   refundNeeded: boolean;
 };
@@ -60,7 +63,14 @@ export function buildTimeline(p: TimelineInput, state: MilestoneState, now: Date
   const paid = state === "PAID" || p.status === "paid";
 
   const steps: TimelineStep[] = [
-    { key: "hold", status: lost || voided ? "problem" : p.authorizationId ? "done" : "current", paypalId: p.authorizationId, paypalStatus: p.authorizationStatus },
+    // Capture and payout reconciles don't re-read the authorization, so its stored status goes stale
+    // (CREATED while PayPal says CAPTURED) once a capture exists; show only the id then.
+    {
+      key: "hold",
+      status: lost || voided ? "problem" : p.authorizationId ? "done" : "current",
+      paypalId: p.authorizationId,
+      paypalStatus: p.captureId ? null : p.authorizationStatus,
+    },
     { key: "approved", status: voided ? "waiting" : p.approvedAt ? "done" : "waiting", paypalId: null, paypalStatus: null },
     {
       key: "captured",
@@ -80,6 +90,7 @@ export function buildTimeline(p: TimelineInput, state: MilestoneState, now: Date
     steps,
     fee: { amountCents: moneyToCents(p.amount), feeCents: p.fee ? moneyToCents(p.fee) : 0, payoutCents: p.payoutAmount ? moneyToCents(p.payoutAmount) : 0 },
     notice: notice(p, state, now, { lost, voided, denied }),
+    checkedAt: p.lastReconciledAt,
     refundNeeded: lost,
   };
 }

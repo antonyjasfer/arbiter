@@ -29,6 +29,8 @@ type Props = {
 
 function statusLine(state: string, paymentStatus: string, p: Props): string {
   if (paymentStatus === "payout_failed" || paymentStatus === "payout_unknown") return errorText(paymentStatus);
+  if (paymentStatus === "authorization_lost") return "PayPal's hold expired or was voided, so this milestone can't be released until it's funded again.";
+  if (paymentStatus === "voided" || state === "CANCELLED") return "Cancelled. The PayPal hold was voided and nothing was charged.";
   if (paymentStatus === "capture_denied") return "PayPal declined the capture, so nothing was charged and the freelancer wasn't paid. Contact support.";
   switch (state) {
     case "APPROVED":
@@ -63,7 +65,7 @@ export function ReleasePanel(props: Props) {
           if (stopped) return;
           setState(v.state);
           setPaymentStatus(v.paymentStatus);
-          if (v.state !== props.state) router.refresh();
+          if (v.state !== props.state || v.paymentStatus !== props.paymentStatus) router.refresh();
           if (!SETTLING.has(v.state) || v.paymentStatus === "payout_failed" || v.paymentStatus === "payout_unknown") return;
         }
       } catch {
@@ -76,7 +78,7 @@ export function ReleasePanel(props: Props) {
       stopped = true;
       if (timer) clearTimeout(timer);
     };
-  }, [props.paymentId, props.state, router]);
+  }, [props.paymentId, props.state, props.paymentStatus, router]);
 
   function approve() {
     setError(null);
@@ -88,7 +90,7 @@ export function ReleasePanel(props: Props) {
     });
   }
 
-  const canApprove = props.isClient && APPROVABLE.has(state) && paymentStatus !== "capture_denied";
+  const canApprove = props.isClient && APPROVABLE.has(state) && paymentStatus !== "capture_denied" && paymentStatus !== "authorization_lost";
   return (
     <div className="flex flex-col gap-2">
       <p className="text-sm" role="status" aria-live="polite">

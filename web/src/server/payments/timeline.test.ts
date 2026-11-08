@@ -21,6 +21,7 @@ function payment(over: Partial<TimelineInput> = {}): TimelineInput {
     amount: "200.00",
     fee: "11.00",
     payoutAmount: "189.00",
+    lastReconciledAt: AUTH_AT,
     ...over,
   };
 }
@@ -55,6 +56,21 @@ describe("buildTimeline", () => {
     expect(steps(t)).toEqual(["hold:done", "approved:done", "captured:current", "paid:waiting"]);
     expect(t.steps[2]).toMatchObject({ paypalId: "24140907B72033302", paypalStatus: "PENDING" });
     expect(t.notice).toMatchObject({ kind: "capture_pending" });
+  });
+
+  it("once a capture exists, hides the hold's stored status (never refreshed after capture) but keeps its id", () => {
+    const t = buildTimeline(
+      payment({ status: "capture_pending", approvedAt: AUTH_AT, captureId: "24140907B72033302", captureStatus: "PENDING" }),
+      "CAPTURE_PENDING",
+      AUTH_AT,
+    );
+    expect(t.steps[0]).toMatchObject({ status: "done", paypalId: "2JT4063409777392S", paypalStatus: null });
+  });
+
+  it("carries when PayPal was last read, so the UI can say how fresh the statuses are", () => {
+    const at = new Date("2026-11-08T10:57:39Z");
+    expect(buildTimeline(payment({ lastReconciledAt: at }), "FUNDED", AUTH_AT).checkedAt).toEqual(at);
+    expect(buildTimeline(payment({ lastReconciledAt: null }), "FUNDED", AUTH_AT).checkedAt).toBeNull();
   });
 
   it("released with a payout sent: paid step current with the batch id", () => {
