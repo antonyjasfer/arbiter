@@ -1,6 +1,7 @@
 import { ExternalLink, ShieldAlert } from "lucide-react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { Tone } from "@/lib/format";
+import { describeStep } from "@/lib/describe-step";
 import { SITE_FAIL_TEXT, STEP_REASON_TEXT } from "@/lib/messages-verification";
 import type { Report, ReportCriterion, VerdictSource } from "@/server/verification/report";
 
@@ -16,35 +17,6 @@ const SOURCE: Record<VerdictSource, string> = {
 };
 const timeIst = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const reason = (r: unknown) => (typeof r === "string" ? (STEP_REASON_TEXT[r] ?? r) : null);
-
-function describeStep(step: Record<string, unknown> | undefined): string {
-  if (!step) return "";
-  const q = (v: unknown) => `“${String(v)}”`;
-  switch (step.op) {
-    case "goto":
-      return `open ${String(step.path)}`;
-    case "fill_by_label":
-      return `type ${q(step.value)} into ${q(step.label)}`;
-    case "click_by_role":
-      return `click the ${String(step.role)} ${q(step.name)}`;
-    case "expect_text":
-      return `see the text ${q(step.text)}`;
-    case "expect_checkbox_checked":
-      return `see ${q(step.label)} checked`;
-    case "http_get":
-      return `GET ${String(step.path)} returns ${String(step.status)}${step.json ? " with the expected JSON" : ""}`;
-    case "file_exists":
-      return `the file ${String(step.path)} exists`;
-    case "file_contains":
-      return `${String(step.path)} contains ${q(step.text)}`;
-    case "package_script_exists":
-      return `package.json has a ${q(step.script)} script`;
-    case "npm_test":
-      return "npm test exits with code 0";
-    default:
-      return String(step.op ?? "");
-  }
-}
 
 type Detail = { kind?: string; reason?: string | null; why?: string; failed_step?: number | string | null; job_conclusion?: string | null; steps?: { index: number; status: string; reason?: string | null; ms?: number; actual_status?: number | null }[] };
 
@@ -118,7 +90,7 @@ function CriterionCard({ c }: { c: ReportCriterion }) {
 
       {c.aiSummary ? (
         <div className="rounded-lg bg-muted/40 p-3 text-sm">
-          <p className="mb-1 text-xs font-medium text-muted-foreground">AI summary (explains the result; it cannot change the verdict)</p>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">AI summary (explains the result; it cannot change the verdict and may be inaccurate: the checks above are what Arbiter verified)</p>
           <p>{c.aiSummary}</p>
         </div>
       ) : null}

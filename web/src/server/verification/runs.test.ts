@@ -310,7 +310,8 @@ describe("runStep", () => {
     await runStep(db(), runner, id, () => at(3 * POLL_MS), reviewer);
     const results = await db().select().from(s.checkResults).where(eq(s.checkResults.runId, id));
     expect(results.map((r) => r.verdict).sort()).toEqual(["fail", "needs_review", "pass", "pass"]);
-    expect(results.every((r) => r.aiSummary === "Everything passed.")).toBe(true);
+    // "Everything passed." is kept on PASS rows and dropped where it contradicts the verdict (reviewer.ts, review I-3).
+    expect(results.every((r) => r.aiSummary === (r.verdict === "pass" ? "Everything passed." : null))).toBe(true);
   });
 
   it("a failed tests job makes the test criterion FAIL", async () => {
