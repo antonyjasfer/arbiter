@@ -138,7 +138,7 @@ export function ReportView({ report }: { report: Report }) {
         <div role="alert" className="flex gap-3 rounded-xl border border-status-review/40 bg-status-review/10 p-4 text-sm">
           <ShieldAlert aria-hidden className="mt-0.5 size-5 shrink-0" />
           <div className="flex flex-col gap-1">
-            <p className="font-medium">The repository contains text addressed to AI reviewers ({report.injectionFlags.length} found)</p>
+            <p className="font-medium">The repository contains text addressed to AI reviewers ({report.injectionFlags.length} {report.injectionFlags.length === 1 ? "place" : "places"})</p>
             <p>Arbiter flagged it and ignored it. Verdicts come only from the tests and browser checks below.</p>
             <ul className="mt-1 flex flex-col gap-0.5 font-mono text-xs">
               {report.injectionFlags.slice(0, 10).map((f, i) => (

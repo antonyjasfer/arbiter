@@ -140,7 +140,8 @@ export async function getReport(db: Db, args: { userId: string; milestoneId: str
       milestone: ms!,
       submission: { repoUrl: sub.repoUrl, commitSha: sub.commitSha, deployUrl: sub.deployUrl, createdAt: sub.createdAt },
       run: { id: run.id, runUrl: run.runUrl, startedAt: run.startedAt, finishedAt: run.finishedAt, createdAt: run.createdAt },
-      injectionFlags: (sub.injectionFlags ?? []) as InjectionFlag[],
+      // One entry per place: the scanner keeps one flag per pattern, so one line can carry several (live 8 Nov: 8 flags, 3 places).
+      injectionFlags: ((sub.injectionFlags ?? []) as InjectionFlag[]).filter((x, i, all) => all.findIndex((y) => y.file === x.file && y.line === x.line) === i),
       criteria,
       runEvidence: ev.filter((e) => e.checkResultId === null).map(toEv),
     },
