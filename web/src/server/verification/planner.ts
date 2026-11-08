@@ -65,9 +65,10 @@ function toDslStep(s: z.infer<typeof flatStepSchema>): Record<string, unknown> |
 // final period). Each must be the WHOLE criterion: "All tests pass and ticking a task marks it done" is a
 // behaviour criterion, and the freelancer's own suite must not decide it (security review I-2, 8 Nov).
 const SUITE_PASSES = [
-  /^(running )?npm test (passes|succeeds|exits (with )?(code )?0)$/,
+  // "npm test passes for cart calculations and order submission validation" (a scope, no comma or semicolon).
+  /^(running )?npm test (passes|succeeds|exits (with )?(code )?0)( for [a-z0-9 /-]+)?$/,
   /^(the )?((repos|repositorys|projects|apps|freelancers) )?(own )?test suite (passes|succeeds)$/,
-  /^(all )?(the )?((repos|projects) )?(unit |automated )?tests pass$/,
+  /^(all )?(the )?((repos|projects) )?(unit |automated )?tests (run and )?pass( (when (executing|running)|with|under|via|using) npm test)?$/,
 ];
 
 export function saysSuitePasses(text: string): boolean {

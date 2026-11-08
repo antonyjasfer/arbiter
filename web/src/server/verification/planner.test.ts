@@ -61,7 +61,17 @@ describe("enforceCheckKinds", () => {
   });
 
   it("matches the suite phrases only as the whole criterion, so a compound behaviour criterion cannot use the suite (review I-2)", () => {
-    for (const text of ["The repo's test suite passes.", "All tests pass", "npm test exits with code 0."]) expect(saysSuitePasses(text), text).toBe(true);
+    // Including the wordings in the demo compiled cache and the shared database (checked 8 Nov).
+    for (const text of [
+      "The repo's test suite passes.",
+      "All tests pass",
+      "npm test exits with code 0.",
+      "Automated tests run and pass when executing npm test.",
+      "npm test passes for menu listing and pricing display component tests.",
+      "npm test passes for cart calculations and order submission validation.",
+    ]) {
+      expect(saysSuitePasses(text), text).toBe(true);
+    }
     for (const text of ["All tests pass and ticking a task marks it done", "Ticking a task marks it done and npm test passes", "The test suite passes, and /health returns 200"]) {
       expect(saysSuitePasses(text), text).toBe(false);
     }
