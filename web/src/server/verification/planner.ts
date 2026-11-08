@@ -17,7 +17,7 @@ import { criterionPlanSchema, MAX_STEPS, planHash, type CheckPlan } from "./plan
 export type Criterion = { key: string; kind: CriterionKind; text: string };
 export type PlanProblem = {
   key: string;
-  problem: "missing" | "unknown_key" | "duplicate" | "invalid_steps" | "test_kind_not_allowed" | "review_must_stay_review" | "must_check_json_field";
+  problem: "missing" | "unknown_key" | "duplicate" | "invalid_steps" | "test_kind_not_allowed" | "review_must_stay_review" | "must_check_json_field" | "static_kind_not_agreed";
 };
 export type PlanError = "not_found" | "ai_busy" | "ai_error" | "invalid_plan" | "daily_cap" | "demo_cap";
 
@@ -61,15 +61,17 @@ function toDslStep(s: z.infer<typeof flatStepSchema>): Record<string, unknown> |
   return out;
 }
 
-// The fixed phrases that mean "the repo's own test suite passes" (after lower-casing and dropping quotes).
+// The fixed phrases that mean "the repo's own test suite passes" (after lower-casing, dropping quotes and a
+// final period). Each must be the WHOLE criterion: "All tests pass and ticking a task marks it done" is a
+// behaviour criterion, and the freelancer's own suite must not decide it (security review I-2, 8 Nov).
 const SUITE_PASSES = [
-  /\bnpm test (passes|succeeds|exits (with )?(code )?0)\b/,
-  /\btest suite (passes|succeeds)\b/,
-  /^(all )?(the )?(unit |automated )?tests pass\b/,
+  /^(running )?npm test (passes|succeeds|exits (with )?(code )?0)$/,
+  /^(the )?((repos|repositorys|projects|apps|freelancers) )?(own )?test suite (passes|succeeds)$/,
+  /^(all )?(the )?((repos|projects) )?(unit |automated )?tests pass$/,
 ];
 
 export function saysSuitePasses(text: string): boolean {
-  const t = text.toLowerCase().replace(/[`'"‘’“”]/g, "").replace(/\s+/g, " ").trim();
+  const t = text.toLowerCase().replace(/[`'"‘’“”]/g, "").replace(/\s+/g, " ").trim().replace(/\.$/, "");
   return SUITE_PASSES.some((re) => re.test(t));
 }
 
@@ -81,13 +83,18 @@ export function saysSuitePasses(text: string): boolean {
 // status and a JSON field with a literal value, the plan must check exactly that. Live 8 Nov a plan for this
 // wording dropped json, so a /health returning {"ok":false} passed. Only this narrow wording is enforced;
 // a plan that checks less than free-text criteria ask for is a known gap (FINDINGS, Phase 4 live checks).
-const JSON_FIELD = /\bGET (\/[^\s?#]*?)\.? returns HTTP (\d{3}) with JSON field ([A-Za-z_][\w-]*) equal to (true|false|null|-?\d+|"[^"]*")(?=[\s.,;]|$)/i;
+const JSON_FIELD = /\bGET (\/[^\s?#]*?)\.? returns HTTP (\d{3}) with JSON field ([A-Za-z_][\w-]*) equal to (true|false|null|-?\d+|"[^"]*")(?=[\s,;]|\.(?!\d)|$)/i;
 
 function checksNamedJsonField(text: string, p: CheckPlan[string]): boolean {
   const m = JSON_FIELD.exec(text);
   if (!m) return true;
   const [, path, status, field, raw] = m;
-  const value: unknown = JSON.parse(raw!.startsWith('"') ? raw! : raw!.toLowerCase());
+  let value: unknown;
+  try {
+    value = JSON.parse(raw!.startsWith('"') ? raw! : raw!.toLowerCase());
+  } catch {
+    return true; // not a literal this rule understands (e.g. "c:\"): leave it to the model, never throw (review I-1)
+  }
   return p.steps.some(
     (st) => st.op === "http_get" && st.path === path && st.status === Number(status) && st.json !== undefined && Object.hasOwn(st.json, field!) && st.json[field!] === value,
   );
@@ -101,6 +108,8 @@ export function enforceCheckKinds(criteria: Criterion[], plan: CheckPlan): Resul
     if (!p) problems.push({ key: c.key, problem: "missing" });
     else if (c.kind === "review" && p.kind !== "review") problems.push({ key: c.key, problem: "review_must_stay_review" });
     else if (p.kind === "test" && !saysSuitePasses(c.text)) problems.push({ key: c.key, problem: "test_kind_not_allowed" });
+    // Files in the repo are the freelancer's to write, so a static check may decide only an agreed static criterion.
+    else if (p.kind === "static" && c.kind !== "static") problems.push({ key: c.key, problem: "static_kind_not_agreed" });
     else if (!checksNamedJsonField(c.text, p)) problems.push({ key: c.key, problem: "must_check_json_field" });
   }
   for (const k of Object.keys(plan)) if (!keys.has(k)) problems.push({ key: k, problem: "unknown_key" });
@@ -142,7 +151,7 @@ const SYSTEM = [
   "  role is one of button, link, checkbox, textbox, heading, tab, menuitem, option, radio, switch; name is the element's visible text.",
   "  Labels, names and texts match the page's visible words (case-insensitive, as a substring): use the exact words the criterion",
   "  gives, and the shortest likely words otherwise. Paths start with a single / and are relative to the deployed site; never write a full URL.",
-  "- static: Arbiter reads files in the repository. Steps: file_exists {path}, file_contains {path, text}, package_script_exists {script}.",
+  "- static: Arbiter reads files in the repository. Use it only for criteria whose agreed kind is static. Steps: file_exists {path}, file_contains {path, text}, package_script_exists {script}.",
   "- test: the freelancer's own test suite (npm test). Use it only for a criterion that literally says the repo's test suite passes.",
   "- review: no steps. Use it when no check Arbiter runs can decide the criterion, such as look and feel, and always for criteria marked review.",
   `At most ${MAX_STEPS} steps per criterion. Reply with JSON that matches the schema. No other text.`,

@@ -60,6 +60,19 @@ describe("enforceCheckKinds", () => {
     }
   });
 
+  it("matches the suite phrases only as the whole criterion, so a compound behaviour criterion cannot use the suite (review I-2)", () => {
+    for (const text of ["The repo's test suite passes.", "All tests pass", "npm test exits with code 0."]) expect(saysSuitePasses(text), text).toBe(true);
+    for (const text of ["All tests pass and ticking a task marks it done", "Ticking a task marks it done and npm test passes", "The test suite passes, and /health returns 200"]) {
+      expect(saysSuitePasses(text), text).toBe(false);
+    }
+  });
+
+  it("allows the static kind only for an agreed static criterion: repo content is the freelancer's (review I-2)", () => {
+    const stat: CheckPlan = { m1c1: { kind: "static", steps: [{ op: "file_contains", path: "README.md", text: "done" }] } };
+    expect(enforceCheckKinds(crit("Ticking a task marks it done", "browser"), stat)).toEqual({ ok: false, error: [{ key: "m1c1", problem: "static_kind_not_agreed" }] });
+    expect(enforceCheckKinds([{ key: "m1c1", kind: "static", text: "README explains how to run it." }], stat).ok).toBe(true);
+  });
+
   it("keeps an agreed review criterion as review, and requires exactly the criteria keys", () => {
     expect(enforceCheckKinds(crit("Looks good", "review"), plan("browser"))).toEqual({ ok: false, error: [{ key: "m1c1", problem: "review_must_stay_review" }] });
     expect(enforceCheckKinds([...crit("x", "browser"), { key: "m1c2", kind: "browser", text: "y" }], plan("browser"))).toEqual({ ok: false, error: [{ key: "m1c2", problem: "missing" }] });
@@ -83,6 +96,13 @@ describe("a criterion that names an endpoint's JSON field must have it checked (
     expect(enforceCheckKinds(health, { m1c1: { kind: "browser", steps: [{ op: "http_get", path: "/health", status: 204, json: { ok: true } }] } } as CheckPlan)).toEqual(bad);
     expect(enforceCheckKinds(health, { m1c1: { kind: "review", steps: [] } } as CheckPlan)).toEqual(bad);
   });
+  it("never throws on a quoted value that is not valid JSON, and does not read 1.5 as 1 (review I-1, M-1)", () => {
+    const odd = [{ key: "m1c1", kind: "browser" as const, text: 'GET /health returns HTTP 200 with JSON field path equal to "c:\\". Done' }];
+    expect(() => enforceCheckKinds(odd, get({}))).not.toThrow();
+    const frac = [{ key: "m1c1", kind: "browser" as const, text: "GET /health returns HTTP 200 with JSON field v equal to 1.5." }];
+    expect(enforceCheckKinds(frac, get({ json: { v: 1 } })).ok).toBe(true);
+  });
+
   it("leaves criteria without that wording alone", () => {
     const other = [{ key: "m1c1", kind: "browser" as const, text: "The health page loads." }];
     expect(enforceCheckKinds(other, get({})).ok).toBe(true);
