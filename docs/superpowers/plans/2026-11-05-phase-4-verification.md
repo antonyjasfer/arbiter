@@ -214,14 +214,14 @@
 
 ### Task 9: Demo repos, live runs, review, handoff
 
-- [ ] **Demo repos:** create `arbiter-demo-pass`, `-fail` and `-injection`, each a TaskBoard app for Milestone 1 (add, tick, health, `npm test`):
+- [x] **Demo repos:** create `arbiter-demo-pass`, `-fail` and `-injection`, each a TaskBoard app for Milestone 1 (add, tick, health, `npm test`):
   - `-fail`: ticking a task doesn't mark it done.
   - `-injection`: a README and an HTML comment addressed to AI reviewers, plus one real failing criterion.
 
   Deploy each as a Render Free web service (Virginia) and pin each commit SHA.
-- [ ] **Test-only path to FUNDED:** `web/scripts/dev-fund-milestone.ts`, a local CLI script that uses the DB directly through `transitionMilestone` and refuses to run unless `PAYPAL_ENVIRONMENT=SANDBOX` and it is given an explicit milestone ID. It is never an HTTP route or server action. Phase 6 deletes it.
-- [ ] **Live:** three real runs (pass, fail, injection) end to end, tolerating the cold start. Record timings and run URLs in FINDINGS "Phase 4 live checks".
-- [ ] **Review:** a fresh-subagent review focused on security, using the Review Focus list; fix Important and above test-first.
+- [x] **Test-only path to FUNDED:** `web/scripts/dev-fund-milestone.ts`, a local CLI script that uses the DB directly through `transitionMilestone` and refuses to run unless `PAYPAL_ENVIRONMENT=SANDBOX` and it is given an explicit milestone ID. It is never an HTTP route or server action. Phase 6 deletes it.
+- [x] **Live:** three real runs (pass, fail, injection) end to end, tolerating the cold start. Record timings and run URLs in FINDINGS "Phase 4 live checks".
+- [x] **Review:** a fresh-subagent review focused on security, using the Review Focus list; fix Important and above test-first.
 - [ ] **Handoff:** do **not** merge to `main` alone. Hand the branch to Phase 6 (see below). Run the secret scan before every push.
 
 ## Render and GitHub settings the user adds
