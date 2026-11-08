@@ -14,10 +14,11 @@ export const PAYMENT_ERROR_TEXT: Record<string, string> = {
   paypal_cancelled: "You closed PayPal before approving. Nothing was charged.",
   invalid_email: "Enter a valid email address (up to 254 characters).",
   demo_locked: "Demo accounts use a seeded sandbox email, so it can't be changed.",
+  not_cancellable: "This milestone can't be cancelled now: only a funded milestone with no submitted work can. Reload the page.",
   // Release (the payment guard and capture/payout).
   not_releasable: "This milestone can't be released now. Reload the page to see its current state.",
   not_funded: "This milestone isn't funded, so there's nothing to release.",
-  refund_needed: "PayPal's hold on this milestone has expired or was voided. Fund it again before approving.",
+  refund_needed: "PayPal's hold on this milestone has expired or was voided, so it can't be released. Re-funding after work was submitted isn't supported yet; contact support.",
   amount_exceeds_milestone: "The payment amount doesn't match the milestone. Nothing was captured; contact support.",
   payee_changed: "The freelancer's PayPal email changed after funding. Nothing was captured or paid; contact support.",
   approver_not_client: "Only the project's client can approve a release.",

@@ -80,6 +80,16 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
       const { orderId: _o, ...a } = read("getAuthorization", authorizationId, authorizations);
       return a;
     },
+    async voidAuthorization(authorizationId, requestId) {
+      replay("voidAuthorization", requestId, () => {
+        const a = authorizations.get(authorizationId);
+        if (!a) throw new PaypalApiError(404, "RESOURCE_NOT_FOUND");
+        if (a.status === "VOIDED") throw new PaypalApiError(422, "PREVIOUSLY_VOIDED");
+        if (a.status !== "CREATED") throw new PaypalApiError(422, "AUTHORIZATION_ALREADY_CAPTURED");
+        a.status = "VOIDED";
+        return null;
+      });
+    },
     async captureAuthorization(authorizationId, args) {
       return replay("captureAuthorization", args.requestId, (): PaypalCapture => {
         const a = authorizations.get(authorizationId);
@@ -142,6 +152,12 @@ export function createFakePaypal(opts: { now?: () => Date } = {}) {
       const o = orders.get(orderId);
       if (!o) throw new Error("fake: no such order");
       o.status = "APPROVED";
+    },
+    /** PayPal voids or expires an authorization on its own (or the buyer cancels it). */
+    setAuthorizationStatus(authorizationId: string, status: string) {
+      const a = authorizations.get(authorizationId);
+      if (!a) throw new Error("fake: no such authorization");
+      a.status = status;
     },
     /** The status the next new capture gets (sandbox captures can come back PENDING / PENDING_REVIEW). */
     setNextCaptureStatus(status: string, reason: string | null = null) {

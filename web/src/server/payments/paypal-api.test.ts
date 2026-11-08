@@ -173,3 +173,16 @@ describe("getPayoutItem", () => {
     expect(calls[0]).toEqual({ method: "GET", path: "/v1/payments/payouts-item/ITEM1" });
   });
 });
+
+describe("voidAuthorization", () => {
+  it("posts the void with the request id and accepts PayPal's 204 No Content", async () => {
+    const { h, calls } = http([{ status: 204, body: null }]);
+    await createPaypalApi(h).voidAuthorization("AUTH1", "rid-v");
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/v2/payments/authorizations/AUTH1/void", requestId: "rid-v" });
+  });
+
+  it("throws a PaypalApiError on a refusal", async () => {
+    const { h } = http([{ status: 422, body: { details: [{ issue: "PREVIOUSLY_VOIDED" }] } }]);
+    await expect(createPaypalApi(h).voidAuthorization("AUTH1", "rid-v")).rejects.toMatchObject({ status: 422, issue: "PREVIOUSLY_VOIDED" });
+  });
+});

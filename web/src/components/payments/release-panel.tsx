@@ -5,7 +5,7 @@
 // the payment from PayPal (GET /api/payments/:id); the server decides what moves, never the browser.
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { approveReleaseAction } from "@/app/(app)/projects/payment-actions";
+import { approveReleaseAction, cancelFundingAction } from "@/app/(app)/projects/payment-actions";
 import { Button } from "@/components/ui/button";
 import { FieldError, FieldHint, Label, Textarea } from "@/components/ui/field";
 import { errorText } from "@/lib/messages";
@@ -29,7 +29,7 @@ type Props = {
 
 function statusLine(state: string, paymentStatus: string, p: Props): string {
   if (paymentStatus === "payout_failed" || paymentStatus === "payout_unknown") return errorText(paymentStatus);
-  if (paymentStatus === "authorization_lost") return "PayPal's hold expired or was voided, so this milestone can't be released until it's funded again.";
+  if (paymentStatus === "authorization_lost") return "PayPal's hold expired or was voided, so this milestone can't be released. Re-funding after work was submitted isn't supported yet; contact support.";
   if (paymentStatus === "voided" || state === "CANCELLED") return "Cancelled. The PayPal hold was voided and nothing was charged.";
   if (paymentStatus === "capture_denied") return "PayPal declined the capture, so nothing was charged and the freelancer wasn't paid. Contact support.";
   switch (state) {
@@ -53,6 +53,7 @@ export function ReleasePanel(props: Props) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   useEffect(() => {
     let stopped = false;
@@ -90,6 +91,18 @@ export function ReleasePanel(props: Props) {
     });
   }
 
+  function cancel() {
+    setError(null);
+    startTransition(async () => {
+      const r = await cancelFundingAction(props.projectId, props.milestoneId);
+      setConfirmCancel(false);
+      if (!r.ok) return setError(r.error);
+      setState(r.value.state);
+      router.refresh();
+    });
+  }
+
+  const canCancel = props.isClient && state === "FUNDED" && paymentStatus === "authorized";
   const canApprove = props.isClient && APPROVABLE.has(state) && paymentStatus !== "capture_denied" && paymentStatus !== "authorization_lost";
   return (
     <div className="flex flex-col gap-2">
@@ -112,6 +125,25 @@ export function ReleasePanel(props: Props) {
               {pending ? "Releasing…" : state === "APPROVED" ? "Retry capture" : "Approve and release payment"}
             </Button>
           </div>
+        </div>
+      ) : null}
+      {canCancel ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {confirmCancel ? (
+            <>
+              <FieldHint>Cancel this milestone? PayPal releases the hold and nothing is charged. This can&apos;t be undone.</FieldHint>
+              <Button type="button" variant="destructive" onClick={cancel} disabled={pending}>
+                {pending ? "Cancelling…" : "Yes, cancel and release the hold"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setConfirmCancel(false)} disabled={pending}>
+                Keep it funded
+              </Button>
+            </>
+          ) : (
+            <Button type="button" variant="outline" onClick={() => setConfirmCancel(true)}>
+              Cancel milestone
+            </Button>
+          )}
         </div>
       ) : null}
       {error ? <FieldError>{errorText(error)}</FieldError> : null}

@@ -9,7 +9,7 @@ import { requireUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
 import { getPaypalApi } from "@/server/payments/default-api";
 import { livePayment, loadMilestone } from "@/server/payments/context";
-import { completeFunding, startFunding } from "@/server/payments/funding";
+import { cancelFunding, completeFunding, startFunding } from "@/server/payments/funding";
 import { setPaypalEmail } from "@/server/payments/payee";
 import { approveRelease, sendPayout } from "@/server/payments/release";
 import { latestRunVerdicts } from "@/server/payments/verdicts";
@@ -38,6 +38,17 @@ export async function completeFundingAction(projectId: string, milestoneId: stri
   const order = orderIdSchema.safeParse(orderId);
   if (!parseId(String(projectId)) || !parseId(String(milestoneId)) || !order.success) return { ok: false, error: "not_found" };
   const r = await completeFunding(getDb(), getPaypalApi(), { userId: user.value.userId, milestoneId, orderId: order.data });
+  revalidatePath(`/projects/${projectId}`);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, value: { state: r.value.state } };
+}
+
+/** The client cancels a funded milestone before any work is submitted: voids the PayPal hold. */
+export async function cancelFundingAction(projectId: string, milestoneId: string): Promise<ActionResult<{ state: string }>> {
+  const user = await requireUser();
+  if (!user.ok) return { ok: false, error: "unauthenticated" };
+  if (!parseId(String(projectId)) || !parseId(String(milestoneId))) return { ok: false, error: "not_found" };
+  const r = await cancelFunding(getDb(), getPaypalApi(), { userId: user.value.userId, milestoneId });
   revalidatePath(`/projects/${projectId}`);
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, value: { state: r.value.state } };

@@ -133,6 +133,14 @@ export function createPaypalApi(http: PaypalHttp) {
       return toAuthorization(parse(authorizationSchema, ensureOk(res), "authorization"));
     },
 
+    /**
+     * Void the whole authorization (Payments v2 "Void authorized payment"): PayPal answers 204 No Content.
+     * Money-moving in the sense of releasing the buyer's hold; only server/payments calls it.
+     */
+    async voidAuthorization(authorizationId: string, requestId: string): Promise<void> {
+      ensureOk(await http.post(`/v2/payments/authorizations/${checkId(authorizationId)}/void`, {}, { requestId }));
+    },
+
     /** A final capture of the whole authorization. invoice_id ties it to our payment row. */
     async captureAuthorization(authorizationId: string, args: { amountCents: number; invoiceId: string; requestId: string }): Promise<PaypalCapture> {
       const path = `/v2/payments/authorizations/${checkId(authorizationId)}/capture`;

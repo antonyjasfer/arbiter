@@ -10,9 +10,12 @@ import { payments } from "../db/schema";
 import type { MilestoneState } from "../milestones/state-machine";
 import { loadMilestone, milestoneForRole } from "./context";
 import { PaypalApiError, type PaypalApi } from "./paypal-api";
+import { reconcileAuthorization } from "./lost-authorization";
 import { CAPTURE_REFUNDED, PAYOUT_STOPPED, reconcileCapture, reconcilePayout, sendPayout } from "./release";
 
 export const RECONCILE_EVERY_MS = 30_000;
+// States where the payment is an uncaptured PayPal hold.
+const HOLD_STATES = new Set<MilestoneState>(["FUNDED", "SUBMITTED", "VERIFYING", "REPORT_READY", "DISPUTED", "APPROVED"]);
 
 export type PaymentView = {
   state: MilestoneState;
@@ -69,7 +72,11 @@ async function advance(db: Db, api: PaypalApi, paymentId: string, state: Milesto
     const r = p.payoutBatchId ? await reconcilePayout(db, api, paymentId) : await sendPayout(db, api, paymentId);
     return r.ok ? null : r.error;
   }
-  // Other states have nothing to read back yet (authorization read-back: Task 5/6).
+  if (HOLD_STATES.has(state)) {
+    // Before a capture, the hold itself can be lost (expired or voided outside Arbiter).
+    const r = await reconcileAuthorization(db, api, paymentId);
+    return r.ok ? null : r.error;
+  }
   return null;
 }
 
@@ -95,7 +102,7 @@ const PAYPAL_ID = /^[A-Za-z0-9-]{1,64}$/;
  * After a verified webhook: find the payment the event's resource belongs to and run the same guarded
  * read-back as a poll. The event body only says where to look; state always comes from PayPal's GET, so
  * order and duplicates don't matter. System actor: no member check (the event was verified with PayPal).
- * Authorization events are handled with the lost-authorization path (Task 5).
+ * Authorization events run the lost-authorization read-back.
  */
 export async function reconcileWebhookResource(db: Db, api: PaypalApi, r: { resourceType: string; resourceId: string }): Promise<WebhookOutcome> {
   if (!PAYPAL_ID.test(r.resourceId)) return { outcome: "ignored" };
@@ -106,6 +113,12 @@ export async function reconcileWebhookResource(db: Db, api: PaypalApi, r: { reso
       case "refund": {
         const refund = await api.getRefund(r.resourceId);
         return refund.captureId ? await viaCapture(db, api, refund.captureId) : { outcome: "no_payment" };
+      }
+      case "authorization": {
+        const [p] = await db.select({ id: payments.id }).from(payments).where(eq(payments.authorizationId, r.resourceId));
+        if (!p) return { outcome: "no_payment" };
+        const a = await reconcileAuthorization(db, api, p.id);
+        return a.ok ? { outcome: "reconciled", state: a.value.state } : outcomeOf(a.error);
       }
       case "payouts":
         return await viaPayout(db, api, eq(payments.payoutBatchId, r.resourceId));

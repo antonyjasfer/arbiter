@@ -27,7 +27,7 @@ function noticeText(n: TimelineNotice): string | null {
     case "honor_period_over":
       return `PayPal's 3-day honor period is over: the hold stays open until ${formatIst(n.expiresAt)}, but PayPal no longer guarantees the funds are available.`;
     case "refund_needed":
-      return "Re-fund needed: PayPal's hold on this milestone expired or was voided, so nothing can be captured. The client must fund it again before approving.";
+      return "Re-fund needed: PayPal's hold on this milestone expired or was voided, so nothing can be captured and approval is blocked. Arbiter can't yet re-fund a milestone after work was submitted; contact support.";
     case "voided":
       return "The PayPal hold was voided. Nothing was charged.";
     case "capture_refunded":

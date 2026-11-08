@@ -20,6 +20,7 @@ export type FundingError =
   | "not_found"
   | "forbidden"
   | "not_agreed"
+  | "not_cancellable"
   | "payee_email_missing"
   | "already_funded"
   | "order_mismatch"
@@ -63,6 +64,11 @@ export async function startFunding(
   if (!payeeEmail) return { ok: false, error: "payee_email_missing" };
 
   let payment = await livePayment(db, m.id);
+  if (payment?.status === "authorization_lost") {
+    // Re-funding after a lost hold (FUNDED -> AGREED): the old row is kept for the record, superseded.
+    if (!(await supersede(db, payment)) && attempt >= 2) return { ok: false, error: "conflict" };
+    return startFunding(db, api, args, attempt + 1);
+  }
   if (payment?.authorizationId) return { ok: false, error: "already_funded" };
   if (payment?.paypalOrderId) {
     // The buyer closed the popup earlier: reuse the order if PayPal still accepts it.
@@ -187,4 +193,56 @@ export async function completeFunding(
   const now = await livePayment(db, m.id);
   if (again.ok && now?.authorizationId === auth.id && again.value.milestone.state !== "AGREED") return { ok: true, value: { state: again.value.milestone.state } };
   return { ok: false, error: "conflict" };
+}
+
+/**
+ * The client cancels a FUNDED milestone (nothing submitted yet): void the hold with PayPal, then move
+ * FUNDED -> CANCELLED. Source: PayPal Payments v2 "Void authorized payment" (204 No Content). A void whose
+ * response was lost is refused as already voided on the retry, so a refusal is read back before giving up.
+ */
+export async function cancelFunding(db: Db, api: PaypalApi, args: { userId: string; milestoneId: string }): Promise<Result<{ state: MilestoneState }, FundingError>> {
+  const access = await milestoneForRole(db, { ...args, allowed: ["client"] });
+  if (!access.ok) return access;
+  const m = access.value.milestone;
+  const payment = await livePayment(db, m.id);
+  if (m.state === "CANCELLED" && payment?.status === "voided") return { ok: true, value: { state: "CANCELLED" } };
+  if (m.state !== "FUNDED" || !payment?.authorizationId) return { ok: false, error: "not_cancellable" };
+
+  const requestId = await ensureRequestId(db, payment.id, "void");
+  try {
+    await api.voidAuthorization(payment.authorizationId, requestId);
+  } catch (e) {
+    if (!(e instanceof PaypalApiError && e.status < 500)) return { ok: false, error: "paypal_unavailable" };
+    let status: string;
+    try {
+      status = (await api.getAuthorization(payment.authorizationId)).status;
+    } catch {
+      return { ok: false, error: "paypal_unavailable" };
+    }
+    if (status !== "VOIDED") return { ok: false, error: "paypal_refused" };
+  }
+
+  // Re-read: storing the request id may have bumped the row's version.
+  const p = await livePayment(db, m.id);
+  if (!p || p.id !== payment.id) return { ok: false, error: "conflict" };
+  const outcome = await db
+    .transaction(async (tx) => {
+      const rows = await tx
+        .update(payments)
+        .set({ status: "voided", authorizationStatus: "VOIDED", voidedAt: new Date(), updatedAt: new Date(), stateVersion: sql`${payments.stateVersion} + 1` })
+        .where(and(eq(payments.id, p.id), eq(payments.stateVersion, p.stateVersion)))
+        .returning({ id: payments.id });
+      if (rows.length === 0) throw new Error("milestone_moved");
+      const moved = await transitionMilestone(tx, { milestoneId: m.id, expectedState: "FUNDED", expectedVersion: m.stateVersion, event: "cancel" });
+      if (!moved.ok) throw new Error("milestone_moved");
+      await appendAudit(tx, { projectId: m.projectId, actorId: args.userId, action: "funding_voided", data: { milestoneId: m.id, paymentId: p.id, authorizationId: p.authorizationId } });
+      return "cancelled" as const;
+    })
+    .catch((e: unknown) => {
+      if (e instanceof Error && e.message === "milestone_moved") return "lost_race" as const;
+      throw e;
+    });
+  if (outcome === "cancelled") return { ok: true, value: { state: "CANCELLED" } };
+  const again = await livePayment(db, m.id);
+  return again?.status === "voided" ? { ok: true, value: { state: "CANCELLED" } } : { ok: false, error: "conflict" };
 }
