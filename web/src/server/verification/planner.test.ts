@@ -4,7 +4,8 @@ import { setupTestDb } from "../db/test-db";
 import * as s from "../db/schema";
 import { createStructuredAi, type AiFailure, type AiRequest, type AiSuccess, type StructuredAi } from "../ai/structured-ai";
 import { REAL_DAILY_CAP } from "../agreements/compile-jobs";
-import { buildPlanRequest, enforceCheckKinds, planChecks, saysSuitePasses, type PlannerOutput } from "./planner";
+import { z } from "zod";
+import { buildPlanRequest, enforceCheckKinds, planChecks, plannerOutputSchema, saysSuitePasses, type PlannerOutput } from "./planner";
 import { lockedProject, type Fixture } from "./test-fixtures";
 import type { CheckPlan } from "./plan-dsl";
 
@@ -84,6 +85,41 @@ describe("the planner prompt", () => {
     expect(system).toMatch(/every behaviour criterion/i);
     expect(system).toMatch(/review.*when no check Arbiter runs can decide/i);
     expect(system).toMatch(/test.*only.*test suite passes/i);
+  });
+});
+
+describe("the schema sent to the model (live 8 Nov: Gemini rejected the strict one as 'too many states')", () => {
+  it("is one flat step shape with no regex patterns, unions or length limits", () => {
+    const js = JSON.stringify(z.toJSONSchema(plannerOutputSchema));
+    expect(js).not.toMatch(/"pattern"|"anyOf"|"oneOf"|"maxLength"|"maxItems"/);
+    expect(js.length).toBeLessThan(2000);
+  });
+});
+
+describe("planChecks: flat model steps become strict DSL steps", () => {
+  const flat = (checks: unknown[]) => ({ checks }) as unknown as PlannerOutput;
+  it("drops empty fields, parses json from a string, and validates the result strictly", async () => {
+    const ai = fakeAi(
+      flat([
+        { criterion_key: "m1c1", kind: "browser", steps: [{ op: "goto", path: "/", text: "" }, { op: "http_get", path: "/health", status: 200, json: '{"ok":true}' }] },
+        ...good.checks.slice(1),
+      ]),
+    );
+    const r = await planChecks(db(), ai, { milestoneId: f.milestoneId, userId: f.client, now: T0 });
+    expect(r.ok && r.value.plan.m1c1).toEqual({ kind: "browser", steps: [{ op: "goto", path: "/" }, { op: "http_get", path: "/health", status: 200, json: { ok: true } }] });
+  });
+
+  it("rejects a field that does not belong to the op, bad json, an absolute URL, and an unknown key (invalid_plan after one re-ask)", async () => {
+    for (const bad of [
+      { criterion_key: "m1c1", kind: "browser", steps: [{ op: "goto", path: "/", label: "x" }] },
+      { criterion_key: "m1c1", kind: "browser", steps: [{ op: "http_get", path: "/health", status: 200, json: "{not json" }] },
+      { criterion_key: "m1c1", kind: "browser", steps: [{ op: "goto", path: "https://evil.example/" }] },
+      { criterion_key: "x; drop", kind: "browser", steps: [{ op: "goto", path: "/" }] },
+    ]) {
+      const ai = fakeAi(flat([bad, ...good.checks.slice(1)]));
+      expect(await planChecks(db(), ai, { milestoneId: f.milestoneId, userId: f.client, now: T0 })).toEqual({ ok: false, error: "invalid_plan" });
+      expect(ai.calls).toBe(2);
+    }
   });
 });
 
