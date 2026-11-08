@@ -27,6 +27,9 @@ export function VerificationPanel(props: {
   const running = latestRun !== null && (latestRun.status === "queued" || latestRun.status === "running");
   const canSubmit = role === "freelancer" && (state === "FUNDED" || state === "REPORT_READY");
   const reportHref = `/projects/${projectId}/milestones/${milestoneId}/report`;
+  // Held here, not in SubmitForm: a failed start after a successful submit moves the milestone to SUBMITTED,
+  // the form unmounts on refresh, and its error would vanish (live 8 Nov: the planner's error went unseen).
+  const [startError, setStartError] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
@@ -48,9 +51,16 @@ export function VerificationPanel(props: {
 
       {running ? <RunStatus run={latestRun} /> : null}
       {state === "SUBMITTED" && submission && !running ? (
-        <StartRun projectId={projectId} submissionId={submission.id} lastError={latestRun?.status === "errored" ? latestRun.errorCode : null} runUrl={latestRun?.runUrl ?? null} />
+        <StartRun
+          projectId={projectId}
+          submissionId={submission.id}
+          lastError={latestRun?.status === "errored" ? latestRun.errorCode : null}
+          runUrl={latestRun?.runUrl ?? null}
+          error={startError}
+          setError={setStartError}
+        />
       ) : null}
-      {canSubmit ? <SubmitForm projectId={projectId} milestoneId={milestoneId} resubmit={state === "REPORT_READY"} /> : null}
+      {canSubmit ? <SubmitForm projectId={projectId} milestoneId={milestoneId} resubmit={state === "REPORT_READY"} onStartError={setStartError} /> : null}
       {!submission && !canSubmit ? <p className="text-sm text-muted-foreground">Waiting for the freelancer to submit the work.</p> : null}
     </div>
   );
@@ -105,10 +115,17 @@ function RunStatus({ run }: { run: Run }) {
   );
 }
 
-function StartRun({ projectId, submissionId, lastError, runUrl }: { projectId: string; submissionId: string; lastError: string | null; runUrl: string | null }) {
+function StartRun(props: {
+  projectId: string;
+  submissionId: string;
+  lastError: string | null;
+  runUrl: string | null;
+  error: string | null;
+  setError: (e: string | null) => void;
+}) {
+  const { projectId, submissionId, lastError, runUrl, error, setError } = props;
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-2">
       {lastError ? (
@@ -145,7 +162,7 @@ function StartRun({ projectId, submissionId, lastError, runUrl }: { projectId: s
   );
 }
 
-function SubmitForm({ projectId, milestoneId, resubmit }: { projectId: string; milestoneId: string; resubmit: boolean }) {
+function SubmitForm({ projectId, milestoneId, resubmit, onStartError }: { projectId: string; milestoneId: string; resubmit: boolean; onStartError: (e: string | null) => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -164,7 +181,7 @@ function SubmitForm({ projectId, milestoneId, resubmit }: { projectId: string; m
             return;
           }
           const run = await startVerificationAction(projectId, sub.value.submissionId);
-          if (!run.ok) setError(run.error);
+          onStartError(run.ok ? null : run.error);
           router.refresh();
         });
       }}
