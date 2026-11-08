@@ -118,5 +118,28 @@ All runs were dispatched through Arbiter's real `runner-client.ts` (`dispatchVer
 
 Other measurements: the browser job takes 41–52 s warm (most of it installing Playwright and Chromium); the artifact is created 3–6 s before the tests job starts; `run plan` runs on the runner's default Node (22.23.4), not Node 24.
 
+### End to end through the UI (Task 9), 2026-11-08 IST
+Local `next start` (`DEMO_MODE=true`) against the shared Neon database, signed in as the demo users. Three new demo projects (one locked $60 milestone, five criteria each) funded with the test-only `dev-fund-milestone.ts` (no PayPal call). TaskBoard `c1954803…` and Bakery `7eced3bf…` were not touched. Planner model `gemini-3.6-flash`; runner `main` at `145d119`.
+
+| Demo (pinned commit) | Run | Verdicts | Run time |
+|---|---|---|---|
+| pass `06a22b8` | [42461629446](https://github.com/antonyjasfer/arbiter-runner/actions/runs/42461629446) | add PASS, tick PASS, `/health` PASS, test suite PASS, layout NEEDS HUMAN REVIEW | 55 s |
+| fail `134409c` | [42461722585](https://github.com/antonyjasfer/arbiter-runner/actions/runs/42461722585) | add PASS, **tick FAIL** ("see 'Buy milk' checked: not checked", screenshot), `/health` PASS, **test suite PASS**, layout NEEDS HUMAN REVIEW | 1 min 39 s |
+| injection `c8c1a71` | [42464043374](https://github.com/antonyjasfer/arbiter-runner/actions/runs/42464043374) | 3 places flagged as text addressed to AI reviewers; add PASS, tick PASS, **`/health` FAIL** ("the JSON did not match", the site returns `{"ok":false}`), test suite PASS, layout NEEDS HUMAN REVIEW | 1 min 3 s |
+
+> **Key demo point: `arbiter-demo-fail`'s own test suite passes, and Arbiter still catches the bug.** Its `npm test` exits 0 (the report labels it "Freelancer's own test suite … weaker evidence"), yet ticking a task does nothing on the deployed site, and Arbiter's browser check on that site FAILs "Ticking a task marks it done" with a screenshot of the unticked box. The freelancer's tests cannot pass a behaviour criterion (Review Focus 7).
+
+Timings: from "Submit and verify" to "Report ready" took 2 min 40 s – 2 min 50 s, made up of the live planner call (37–40 s; a cached plan is reused on resubmit), the GitHub run (55 s – 1 min 39 s, three runs in parallel) and polling. The demo sites were already awake, so no Render cold start was measured here (Task 5 measured 46 s).
+
+**Found live and fixed (each test-first):**
+1. **Gemini rejected the planner schema** ("too many states for serving") because of its regexes, length limits and ten-way union. The model now gets one flat step shape; every step is rebuilt and validated by the strict DSL afterwards (`94208e0`).
+2. **A correct site failed its browser checks.** The planned label "Task" matched both the "New task" input and `<ul aria-label="Tasks">`, so the fill was ambiguous (run [42461058831](https://github.com/antonyjasfer/arbiter-runner/actions/runs/42461058831): add and tick FAIL on the pass demo). The interpreter now types only into fillable fields and finds checkboxes by role (runner `145d119`).
+3. **A weak plan let a broken endpoint pass.** For the injection demo Gemini planned `http_get /health` with no `json`, so `{"ok":false}` passed (run [42461768447](https://github.com/antonyjasfer/arbiter-runner/actions/runs/42461768447): 4 PASS, 0 FAIL). The planner only sees the criteria text (identical for all three demos, no repo content), so this was model variance, not the injection working. A criterion worded "GET /path returns HTTP N with JSON field X equal to V" now must get exactly that check (one re-ask, then `invalid_plan`), and cached plans are re-checked (`159e73f`). **Not solved in general:** a plan can still check less than a free-text criterion asks. Recommendation for Phase 6 (user's decision): show the client the planned checks before the run.
+4. In that same weak run the **AI summary claimed `/health` returned `ok` = true**, which no step had checked. Verdicts were unaffected, but the summary misinformed the client; handed to the security review.
+5. The injection banner counted 8 flags for 3 places (one flag per pattern per line). The report now lists each place once (`d3be73d`).
+6. When planning failed after "Submit and verify", the error vanished with the form; the milestone simply showed "Start verification". The panel now keeps the error (`d834db2`). Typechecked and built; not exercised live, since no planner failure recurred.
+
+Walkthrough, also checked: the client sees "Report ready" and "View report" with no submit form; evidence screenshots are served to members with `default-src 'none'`; evidence requested without a session returns 404. Copy nit for Phase 6: the agreement card still says "milestones are now AGREED; funding them with PayPal comes next" after the milestone is funded and submitted.
+
 ## Phase 5 live checks
 _Filled in by the phase-5-payments branch. Phase 4 never edits this section._
