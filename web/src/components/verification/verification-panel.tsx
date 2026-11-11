@@ -8,6 +8,7 @@ import { startVerificationAction, submitWorkAction } from "@/app/(app)/projects/
 import { Button } from "@/components/ui/button";
 import { FieldError, FieldHint, Input, Label } from "@/components/ui/field";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { demoRepoOptions, type DemoRepo } from "@/lib/demo-repos";
 import { pollDelay } from "@/lib/format";
 import { errorText } from "@/lib/messages";
 
@@ -15,6 +16,7 @@ type Run = { id: string; status: string; errorCode: string | null; runUrl: strin
 type Submission = { id: string; repoUrl: string; commitSha: string; deployUrl: string; createdAt: string };
 
 export function VerificationPanel(props: {
+  isDemo?: boolean;
   projectId: string;
   milestoneId: string;
   role: "client" | "freelancer";
@@ -60,7 +62,7 @@ export function VerificationPanel(props: {
           setError={setStartError}
         />
       ) : null}
-      {canSubmit ? <SubmitForm projectId={projectId} milestoneId={milestoneId} resubmit={state === "REPORT_READY"} onStartError={setStartError} /> : null}
+      {canSubmit ? <SubmitForm projectId={projectId} milestoneId={milestoneId} resubmit={state === "REPORT_READY"} onStartError={setStartError} isDemo={props.isDemo ?? false} /> : null}
       {!submission && !canSubmit ? <p className="text-sm text-muted-foreground">Waiting for the freelancer to submit the work.</p> : null}
     </div>
   );
@@ -162,12 +164,26 @@ function StartRun(props: {
   );
 }
 
-function SubmitForm({ projectId, milestoneId, resubmit, onStartError }: { projectId: string; milestoneId: string; resubmit: boolean; onStartError: (e: string | null) => void }) {
+function SubmitForm({ projectId, milestoneId, resubmit, onStartError, isDemo }: { projectId: string; milestoneId: string; resubmit: boolean; onStartError: (e: string | null) => void; isDemo: boolean }) {
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  const demos = demoRepoOptions(isDemo);
+  const [chosen, setChosen] = useState<DemoRepo | null>(null);
+  // Fills the three fields only; the freelancer still presses "Submit and verify", and the server validates it.
+  function fillDemo(d: DemoRepo) {
+    const form = formRef.current;
+    if (!form) return;
+    for (const [name, value] of [["repoUrl", d.repoUrl], ["commitSha", d.commitSha], ["deployUrl", d.deployUrl]] as const) {
+      const el = form.elements.namedItem(name);
+      if (el instanceof HTMLInputElement) el.value = value;
+    }
+    setChosen(d);
+  }
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   return (
     <form
+      ref={formRef}
       className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault();
@@ -187,6 +203,19 @@ function SubmitForm({ projectId, milestoneId, resubmit, onStartError }: { projec
       }}
     >
       <p className="text-sm font-medium">{resubmit ? "Submit a new version" : "Submit the work"}</p>
+      {demos.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs text-muted-foreground">Demo project: fill the form with one of the pinned demo repos.</p>
+          <div className="flex flex-wrap gap-2">
+            {demos.map((d) => (
+              <Button key={d.id} type="button" size="sm" variant="outline" onClick={() => fillDemo(d)} aria-pressed={chosen?.id === d.id}>
+                {d.label}
+              </Button>
+            ))}
+          </div>
+          {chosen ? <FieldHint>Expect: {chosen.expect}</FieldHint> : null}
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`repo-${milestoneId}`}>Public GitHub repository</Label>

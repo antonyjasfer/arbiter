@@ -21,7 +21,7 @@ const STATE: Record<LockedMilestone["state"], { label: string; tone: Tone }> = {
 };
 
 // The locked agreement's milestones, each with the Phase 4 (verification) and Phase 5 (payment) slots.
-export function LockedMilestones({ projectId, milestones, role }: { projectId: string; milestones: LockedMilestone[]; role: ProjectRole }) {
+export function LockedMilestones({ projectId, milestones, role, isDemo = false }: { projectId: string; milestones: LockedMilestone[]; role: ProjectRole; isDemo?: boolean }) {
   if (milestones.length === 0) return null;
   return (
     <section aria-labelledby="milestones-title" className="flex flex-col gap-3">
@@ -37,7 +37,7 @@ export function LockedMilestones({ projectId, milestones, role }: { projectId: s
               </p>
               <StatusBadge tone={STATE[m.state].tone}>{STATE[m.state].label}</StatusBadge>
             </div>
-            <MilestoneVerification projectId={projectId} milestone={m} role={role} />
+            <MilestoneVerification projectId={projectId} milestone={m} role={role} isDemo={isDemo} />
             <MilestonePayment projectId={projectId} milestone={m} role={role} />
           </li>
         ))}

@@ -9,7 +9,7 @@ import { VerificationPanel } from "./verification-panel";
 // component that submits, starts and polls). Nothing shows before the milestone is funded.
 const SHOWN = new Set(["FUNDED", "SUBMITTED", "VERIFYING", "REPORT_READY", "APPROVED", "CAPTURE_PENDING", "RELEASED", "PAID", "DISPUTED"]);
 
-export async function MilestoneVerification({ projectId, milestone }: { projectId: string; milestone: LockedMilestone; role: ProjectRole }) {
+export async function MilestoneVerification({ projectId, milestone, isDemo = false }: { projectId: string; milestone: LockedMilestone; role: ProjectRole; isDemo?: boolean }) {
   if (!SHOWN.has(milestone.state)) return null;
   const user = await requireUser();
   if (!user.ok) return null;
@@ -18,6 +18,7 @@ export async function MilestoneVerification({ projectId, milestone }: { projectI
   const p = r.value;
   return (
     <VerificationPanel
+      isDemo={isDemo}
       projectId={projectId}
       milestoneId={milestone.id}
       role={p.role}
