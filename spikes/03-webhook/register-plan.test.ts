@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { planRegistration } from "./register-plan.js";
+import { planRegistration, requestKey, WEBHOOK_EVENT_TYPES } from "./register-plan.js";
 
 const OLD = "https://arbiter-q41f.onrender.com/webhook";
 const NEW = "https://arbiter-q41f.onrender.com/api/webhooks/paypal";
 const WANTED = ["A", "B"];
+
+describe("WEBHOOK_EVENT_TYPES", () => {
+  it("subscribes to the Phase 5 capture outcomes as well as the earlier events", () => {
+    for (const name of ["PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REVERSED", "PAYMENT.CAPTURE.REFUNDED", "PAYMENT.CAPTURE.COMPLETED", "PAYMENT.AUTHORIZATION.VOIDED", "PAYMENT.PAYOUTS-ITEM.SUCCEEDED"]) {
+      expect(WEBHOOK_EVENT_TYPES).toContain(name);
+    }
+    expect(new Set(WEBHOOK_EVENT_TYPES).size).toBe(WEBHOOK_EVENT_TYPES.length);
+  });
+});
+
+describe("requestKey", () => {
+  it("changes when the patch body changes, so a new PATCH is not replayed as the old one", () => {
+    const a = requestKey("patch", NEW, [{ op: "replace", path: "/url", value: NEW }]);
+    const b = requestKey("patch", NEW, [{ op: "replace", path: "/event_types", value: [{ name: "A" }] }]);
+    expect(a).not.toBe(b);
+    expect(requestKey("patch", NEW, [{ op: "replace", path: "/url", value: NEW }])).toBe(a);
+  });
+});
 
 describe("planRegistration", () => {
   it("reuses a webhook already at the target url with every wanted event", () => {

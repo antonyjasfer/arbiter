@@ -6,18 +6,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { requireEnv, requireEnvOrExit, setEnvValue } from "../lib/env.js";
 import { getAccessToken, newRequestId, PayPalError, ppFetch } from "../lib/paypal.js";
-import { planRegistration } from "./register-plan.js";
+import { planRegistration, requestKey, WEBHOOK_EVENT_TYPES } from "./register-plan.js";
 
 const DEFAULT_URL = "https://arbiter-q41f.onrender.com/api/webhooks/paypal";
-const EVENT_TYPES = [
-  "CHECKOUT.ORDER.APPROVED",
-  "PAYMENT.AUTHORIZATION.CREATED",
-  "PAYMENT.AUTHORIZATION.VOIDED",
-  "PAYMENT.CAPTURE.PENDING",
-  "PAYMENT.CAPTURE.COMPLETED",
-  "PAYMENT.PAYOUTSBATCH.SUCCESS",
-  "PAYMENT.PAYOUTS-ITEM.SUCCEEDED",
-];
+const EVENT_TYPES = WEBHOOK_EVENT_TYPES;
 
 const ENV_FILE = new URL("../../.env.local", import.meta.url);
 const OUT_DIR = new URL("../.out/", import.meta.url);
@@ -25,17 +17,21 @@ const REQUEST_ID_FILE = new URL("webhook-register.json", OUT_DIR);
 
 type Webhook = { id: string; url: string; event_types: { name: string }[] };
 
-/** Reuses the stored PayPal-Request-Id for the same action and URL, so a retried write stays idempotent. */
-function requestIdFor(action: string, url: string): string {
+/**
+ * Reuses the stored PayPal-Request-Id only for the same action, URL and body, so a retried write stays
+ * idempotent but a different PATCH (e.g. new event types) is never replayed as an earlier one.
+ */
+function requestIdFor(action: string, url: string, body: unknown): string {
+  const key = requestKey(action, url, body);
   try {
-    const saved = JSON.parse(readFileSync(REQUEST_ID_FILE, "utf8")) as { action?: string; url?: string; requestId?: string };
-    if (saved.action === action && saved.url === url && saved.requestId) return saved.requestId;
+    const saved = JSON.parse(readFileSync(REQUEST_ID_FILE, "utf8")) as { key?: string; requestId?: string };
+    if (saved.key === key && saved.requestId) return saved.requestId;
   } catch {
     // no stored id yet
   }
   const requestId = newRequestId();
   mkdirSync(OUT_DIR, { recursive: true });
-  writeFileSync(REQUEST_ID_FILE, JSON.stringify({ action, url, requestId }, null, 2));
+  writeFileSync(REQUEST_ID_FILE, JSON.stringify({ key, requestId }, null, 2));
   return requestId;
 }
 
@@ -65,12 +61,12 @@ async function main() {
     id = plan.id;
   } else if (plan.action === "patch") {
     console.log(`patching the stored webhook: ${plan.patch.map((p) => p.path).join(", ")}`);
-    const r = await ppFetch<Webhook>(token, "PATCH", `/v1/notifications/webhooks/${plan.id}`, { requestId: requestIdFor("patch", url), body: plan.patch });
+    const r = await ppFetch<Webhook>(token, "PATCH", `/v1/notifications/webhooks/${plan.id}`, { requestId: requestIdFor("patch", url, plan.patch), body: plan.patch });
     console.log(`patch returned HTTP ${r.status}`);
     id = plan.id;
   } else {
     const r = await ppFetch<Webhook>(token, "POST", "/v1/notifications/webhooks", {
-      requestId: requestIdFor("create", url),
+      requestId: requestIdFor("create", url, EVENT_TYPES),
       body: { url, event_types: EVENT_TYPES.map((name) => ({ name })) },
     });
     console.log(`create returned HTTP ${r.status}`);

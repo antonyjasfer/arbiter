@@ -15,6 +15,12 @@ export type WebhookDeps = {
   /** Read-only GET of a PayPal resource path. */
   fetchResource: (path: string) => Promise<unknown>;
   log: (line: string) => void;
+  /**
+   * Phase 5: move payment state from PayPal's read-back of this resource (server/payments). Runs on every
+   * verified delivery, duplicates included: it is idempotent, and a redelivery after a failed round must
+   * try again. Returns "retry" when PayPal couldn't be read; throws when it refused for good.
+   */
+  reconcilePayment?: (r: { resourceType: string; resourceId: string }) => Promise<{ outcome: string }>;
 };
 
 const json = (status: number, body: unknown) => Response.json(body, { status });
@@ -58,6 +64,18 @@ export async function handlePaypalWebhook(request: Request, deps: WebhookDeps): 
       await reconcileEvent(deps.db, { id: stored.id, resourceType: e.resourceType, resourceId: e.resourceId }, deps.fetchResource);
     }
     if (!stored.inserted) deps.log(`${label} duplicate=true reconciled=${needsReconcile}`);
+    if (deps.reconcilePayment) {
+      let outcome: string;
+      try {
+        outcome = (await deps.reconcilePayment({ resourceType: e.resourceType, resourceId: e.resourceId })).outcome;
+      } catch (err) {
+        // A refusal a redelivery wouldn't change (e.g. an amount mismatch): logged for a human, acknowledged.
+        deps.log(`${label} payment=error reason=${(err as Error).message}`);
+        return json(200, { ok: true, duplicate: !stored.inserted });
+      }
+      deps.log(`${label} payment=${outcome}`);
+      if (outcome === "retry") return json(500, { error: "PayPal unavailable, retry" });
+    }
     return json(200, { ok: true, duplicate: !stored.inserted });
   } catch (e) {
     deps.log(`${label} error=${(e as Error).message}`);

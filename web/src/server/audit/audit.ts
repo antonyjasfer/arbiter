@@ -36,6 +36,7 @@ export const AUDIT_ACTIONS = [
   "capture_pending",
   "capture_completed",
   "capture_denied",
+  "capture_refunded",
   "payout_sent",
   "payout_succeeded",
   "payout_failed",

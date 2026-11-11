@@ -26,6 +26,39 @@ On the live site, "Try the demo" signs you in as a seeded client (Dana) or freel
 - **Audit log limit.** Each event's hash covers the previous one and the project stores the latest hash, so editing, deleting or reordering events is detected. Someone with write access to the whole database could still rewrite both; the head hash is not anchored anywhere public.
 - **Free tiers:** Render Free sleeps after 15 minutes idle (first request after that took about 24 s in testing); Neon suspends after 5 minutes; the Gemini free tier is rate-limited (designed for 10 RPM / 250 RPD) and Google may use prompts to improve its products, so only public repo content and seeded text are sent.
 
+## Payments
+
+Everything runs in the **PayPal sandbox**; no real money moves.
+
+**How a milestone is paid**
+1. **Fund.** The client approves a PayPal order with `intent: AUTHORIZE` (PayPal JS SDK v6 buttons). PayPal places a **hold** (an authorization); nothing is charged yet.
+2. **Approve.** After the verification report, the client approves the release. With a failed check, the client must write why (an override of at least 20 characters, kept in the audit log).
+3. **Capture.** Server code captures the authorization for exactly the milestone amount.
+4. **Payout.** Once PayPal reports the capture `COMPLETED`, Arbiter sends a PayPal Payout to the freelancer: the milestone minus Arbiter's fee of **5% + $1.00**. For example, a $200.00 milestone has an $11.00 fee and pays out $189.00. The breakdown is shown before approval and on the payment timeline.
+
+**Who can move money.** Only deterministic code in `web/src/server/payments/` calls PayPal's money-moving endpoints (create order, authorize, capture, void, payouts). A boundary test fails the test suite if anything else imports the write-capable PayPal client, or if AI code imports the payments module. The AI never moves money.
+
+**Before every capture and every payout, the payment guard checks:**
+- the amount is at most the milestone amount;
+- the payee is the agreed freelancer's PayPal email, as recorded at funding;
+- the approver is the project's client;
+- the latest verification run has no FAIL, or the client wrote an override;
+- for a payout, the capture reads back `COMPLETED` from PayPal.
+
+**Safety against replays and races**
+- Every PayPal write sends a `PayPal-Request-Id` that is stored before the call and reused on retry. A double click or a retry after a timeout returns PayPal's original result instead of capturing or paying twice. A payout also uses a deterministic `sender_batch_id`.
+- Every state change is a guarded SQL update (expected state and version), done in the same transaction as its hash-chained audit event.
+
+**Webhooks are hints, not truth.** `POST /api/webhooks/paypal` verifies each event's signature with PayPal and stores it once per event id. It then reads the capture, refund, payout or authorization back from PayPal and applies what PayPal says now, so arrival order and duplicates don't matter. Opening the project page does the same read-back, at most every 30 s. This covers webhooks lost while the free Render service sleeps or redeploys, and local runs, which PayPal can't reach. Subscribed events: CHECKOUT.ORDER.APPROVED; PAYMENT.AUTHORIZATION.CREATED and .VOIDED; PAYMENT.CAPTURE.PENDING, .COMPLETED, .DENIED, .REVERSED and .REFUNDED; PAYMENT.PAYOUTSBATCH.SUCCESS; PAYMENT.PAYOUTS-ITEM.SUCCEEDED.
+
+**Honest limits**
+- **The hold expires.** A PayPal authorization is valid for **29 days**; we measured `expiration_time` at 29 days in the sandbox. PayPal guarantees the funds only for the first **3 days** (the honor period); after that, a capture can fail. Arbiter doesn't reauthorize holds automatically.
+- **Lost holds.** If a hold expires or is voided before work is submitted, the milestone goes back to "Agreed, not funded" and the client funds it again; the old payment record is kept and superseded. If it happens after work was submitted, approval is blocked and the page says "Re-fund needed". Re-funding at that point is not supported yet.
+- **Captures can stay PENDING.** In the sandbox, a capture can come back `PENDING` with reason `PENDING_REVIEW`. The page then says "PayPal is settling this payment; Arbiter pays the freelancer once it completes", and no payout is sent until PayPal reports `COMPLETED`. Our test capture on 7 Nov 2026 was still `PENDING_REVIEW` about 24 hours later.
+- **Denied, refunded or reversed payments.** A denied capture leaves the milestone "Approved" with nothing charged or paid; it is flagged for a person and never retried automatically. A refund or reversal is recorded and flagged for a person; Arbiter never claws back a payout automatically.
+- **Cancel.** The client can cancel a funded milestone before any work is submitted; Arbiter voids the hold and nothing is charged.
+- **Not an escrow service.** Arbiter isn't a licensed escrow service or money transmitter. Collecting from the client and paying out to the freelancer would need PayPal platform approval in production.
+
 ## Architecture
 
 - `web/`: Next.js 16 App Router app (TypeScript strict, Tailwind + shadcn/ui, Auth.js v5 with GitHub, Drizzle on Neon Postgres). All PayPal calls are server-side in `web/src/server/paypal/`.
