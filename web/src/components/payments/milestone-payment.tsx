@@ -5,7 +5,7 @@ import { getDb } from "@/server/db/client";
 import { serverEnv } from "@/server/env";
 import { livePayment } from "@/server/payments/context";
 import { buildTimeline } from "@/server/payments/timeline";
-import { latestRunVerdicts } from "@/server/payments/verdicts";
+import { guardVerdicts } from "@/server/payments/verdicts";
 import { moneyToCents } from "@/server/projects/money";
 import type { LockedMilestone } from "@/server/projects/workspace";
 import { FundButton } from "./fund-button";
@@ -23,7 +23,7 @@ export async function MilestonePayment({ projectId, milestone, role }: { project
   const db = getDb();
   const p = await livePayment(db, milestone.id);
   if (!p?.authorizationId) return null;
-  const verdicts = await latestRunVerdicts(db)(milestone.id);
+  const verdicts = await guardVerdicts(db)(milestone.id);
   const label = (money: string | null) => formatCents(money === null ? 0 : moneyToCents(money));
   // The (app) layout awaits connection(), so reading the clock here is request-time, not prerender-time.
   const timeline = buildTimeline(p, milestone.state, new Date());

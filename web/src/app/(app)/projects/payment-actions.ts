@@ -12,7 +12,7 @@ import { livePayment, loadMilestone } from "@/server/payments/context";
 import { cancelFunding, completeFunding, startFunding } from "@/server/payments/funding";
 import { setPaypalEmail } from "@/server/payments/payee";
 import { approveRelease, sendPayout } from "@/server/payments/release";
-import { latestRunVerdicts } from "@/server/payments/verdicts";
+import { guardVerdicts } from "@/server/payments/verdicts";
 import type { ActionResult } from "./actions";
 
 const orderIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,64}$/);
@@ -66,7 +66,7 @@ export async function approveReleaseAction(projectId: string, milestoneId: strin
   if (!reason.success) return { ok: false, error: "override_too_short" };
   const db = getDb();
   const api = getPaypalApi();
-  const r = await approveRelease(db, api, { userId: user.value.userId, milestoneId, overrideReason: reason.data, latestVerdicts: latestRunVerdicts(db) });
+  const r = await approveRelease(db, api, { userId: user.value.userId, milestoneId, overrideReason: reason.data, latestVerdicts: guardVerdicts(db) });
   if (r.ok && r.value.state === "RELEASED") {
     const p = await livePayment(db, milestoneId);
     if (p) await sendPayout(db, api, p.id);

@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { setupTestDb } from "../src/server/db/test-db";
 import * as s from "../src/server/db/schema";
 import { createFakePaypal } from "../src/server/payments/fake-paypal";
-import { latestRunVerdicts } from "../src/server/payments/verdicts";
+import { guardVerdicts } from "../src/server/payments/verdicts";
 import { auditActions, fundMilestone, lockedProject, milestoneRow, type Fixture } from "../src/server/payments/test-fixtures";
 import { devReportReady } from "./dev-report-ready";
 
@@ -36,7 +36,7 @@ describe("dev-report-ready (test-only CLI)", () => {
     expect(await devReportReady(db(), { milestoneId: m1, env: SANDBOX })).toEqual({ ok: true, value: { state: "REPORT_READY" } });
     expect((await milestoneRow(db(), m1)).state).toBe("REPORT_READY");
     // Never a PASS: nothing was verified, so every criterion is needs_review and says why.
-    expect(await latestRunVerdicts(db())(m1)).toEqual(["needs_review"]);
+    expect(await guardVerdicts(db())(m1)).toEqual(["needs_review"]);
     const [cr] = await db().select().from(s.checkResults);
     expect(cr!.summary).toMatch(/test-only/i);
     const [sub] = await db().select().from(s.submissions).where(eq(s.submissions.milestoneId, m1));
