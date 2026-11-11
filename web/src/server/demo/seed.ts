@@ -138,6 +138,7 @@ async function deleteDemoProjects(tx: Db, kept: string[]) {
   await tx.delete(s.submissions).where(inArray(s.submissions.milestoneId, M));
   await tx.delete(s.disputes).where(inArray(s.disputes.milestoneId, M));
   await tx.delete(s.payments).where(inArray(s.payments.milestoneId, M));
+  await tx.delete(s.checkPlans).where(inArray(s.checkPlans.milestoneId, M));
   await tx.delete(s.acceptanceCriteria).where(inArray(s.acceptanceCriteria.milestoneId, M));
   await tx.delete(s.milestones).where(inArray(s.milestones.agreementVersionId, V));
   await tx.delete(s.agreementVersions).where(inArray(s.agreementVersions.agreementId, A));
@@ -164,9 +165,11 @@ export async function resetDemo(db: Db, args: { userId: string; model: string; c
       .where(and(eq(s.projects.isDemo, true), eq(s.auditEvents.action, "demo_reset"), gt(s.auditEvents.createdAt, since)))
       .limit(1);
     if (recent) return { ok: false, error: "too_soon" } as const;
-    // Lock every demo milestone and payment before deciding what to keep, so a funding or capture that is
+    // Lock every demo payment, then every demo milestone (the order the payment writers use), before deciding
+    // what to keep, so a funding or capture that is
     // running right now either finished first (and is kept) or waits and then fails on the deleted milestone
     // before any PayPal call (funding inserts its payment row before create-order).
+    const lockedPayments = await demoPaymentsQuery(tx).for("update", { of: s.payments });
     await tx
       .select({ id: s.milestones.id })
       .from(s.milestones)
@@ -175,7 +178,7 @@ export async function resetDemo(db: Db, args: { userId: string; model: string; c
       .innerJoin(s.projects, eq(s.projects.id, s.agreements.projectId))
       .where(eq(s.projects.isDemo, true))
       .for("update", { of: s.milestones });
-    const kept = [...keptFrom(await demoPaymentsQuery(tx).for("update", { of: s.payments }), new Date())];
+    const kept = [...keptFrom(lockedPayments, new Date())];
     await deleteDemoProjects(tx, kept);
     const ids = await upsertDemoUsers(tx, args.freelancerPaypalEmail);
     await loadCache(tx, args.cache);

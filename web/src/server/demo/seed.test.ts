@@ -234,6 +234,15 @@ describe("resetDemo keeps projects with a live PayPal payment", () => {
     expect(await keptDemoProjectIds(db())).toEqual(new Set());
   });
 
+  it("deletes a dropped project whose milestone has a check plan (review I1: check_plans FK)", async () => {
+    // Like the Phase 4 demo projects on live: FUNDED by the old test-only script (no payment row), then verified.
+    const tb = await lockedTaskboard();
+    await db().insert(s.checkPlans).values({ milestoneId: tb.milestoneIds[0]!, criteriaHash: "d".repeat(64), plan: {}, model: "gemini-test" });
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(false);
+    expect(await db().select().from(s.checkPlans)).toEqual([]);
+  });
+
   it("deletes a project with a verification run and run-level evidence (null check_result_id) cleanly", async () => {
     const tb = await lockedTaskboard();
     const m1 = tb.milestoneIds[0]!;

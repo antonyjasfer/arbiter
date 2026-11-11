@@ -26,6 +26,19 @@ On the live site, "Try the demo" signs you in as a seeded client (Dana) or freel
 - **Audit log limit.** Each event's hash covers the previous one and the project stores the latest hash, so editing, deleting or reordering events is detected. Someone with write access to the whole database could still rewrite both; the head hash is not anchored anywhere public.
 - **Free tiers:** Render Free sleeps after 15 minutes idle (first request after that took about 24 s in testing); Neon suspends after 5 minutes; the Gemini free tier is rate-limited (designed for 10 RPM / 250 RPD) and Google may use prompts to improve its products, so only public repo content and seeded text are sent.
 
+## Known limitations
+
+Cut from Phase 6 for the deadline (planned, not built):
+- **No Approve on the report page.** The client approves on the milestone's payment panel on the project page, after opening the report.
+- **No Disagree / DISPUTED flow.** A client who disagrees with a report can't record a dispute yet; they can still cancel a funded milestone with the existing Cancel button, which voids the PayPal hold.
+- **No "What Arbiter checked" block.** The report lists each browser check's steps with their results, but doesn't show the planned steps on their own before a run has results.
+- **Stale copy.** After both parties approve, the agreement still says "funding them with PayPal comes next", even once milestones are funded.
+- **A prerender warning.** `next build` warns that the dashboard reads `crypto.getRandomValues` during prerender; the page works.
+
+Also:
+- **Reset demo and a concurrent payment.** Reset locks every demo milestone and payment row before deciding what to keep, so a funding or capture in flight is kept or fails before calling PayPal. A true two-connection race can't run in the test database (one connection), so that path is designed and reviewed, not tested.
+- **Runner egress is open** (see Honest limits): GitHub-hosted runners have no network allow-list.
+
 ## Payments
 
 Everything runs in the **PayPal sandbox**; no real money moves.
