@@ -9,6 +9,7 @@ import type { Db } from "../db/types";
 import { payments } from "../db/schema";
 import type { MilestoneState } from "../milestones/state-machine";
 import { loadMilestone, milestoneForRole } from "./context";
+import { readPaymentView, type PaymentView } from "./payment-view";
 import { PaypalApiError, type PaypalApi } from "./paypal-api";
 import { reconcileAuthorization } from "./lost-authorization";
 import { CAPTURE_REFUNDED, captureApproved, PAYOUT_STOPPED, reconcileCapture, reconcilePayout, sendPayout } from "./release";
@@ -17,14 +18,7 @@ export const RECONCILE_EVERY_MS = 30_000;
 // States where the payment is an uncaptured PayPal hold.
 const HOLD_STATES = new Set<MilestoneState>(["FUNDED", "SUBMITTED", "VERIFYING", "REPORT_READY", "DISPUTED", "APPROVED"]);
 
-export type PaymentView = {
-  state: MilestoneState;
-  paymentStatus: string;
-  captureStatus: string | null;
-  payoutStatus: string | null;
-  /** The last step's error code if PayPal could not be reached or refused; the next poll retries. */
-  lastError: string | null;
-};
+export type { PaymentView };
 
 export async function reconcilePayment(
   db: Db,
@@ -39,7 +33,7 @@ export async function reconcilePayment(
 
   const claimed = await claimRound(db, p.id, args.now ?? new Date());
   const lastError = claimed ? await advance(db, api, p.id, access.value.milestone.state) : null;
-  return view(db, p.id, lastError);
+  return readPaymentView(db, p.id, lastError);
 }
 
 /**
@@ -91,12 +85,6 @@ async function advance(db: Db, api: PaypalApi, paymentId: string, state: Milesto
   return null;
 }
 
-async function view(db: Db, paymentId: string, lastError: string | null): Promise<Result<PaymentView, "not_found">> {
-  const [p] = await db.select().from(payments).where(eq(payments.id, paymentId));
-  const m = p && (await loadMilestone(db, p.milestoneId));
-  if (!p || !m) return { ok: false, error: "not_found" };
-  return { ok: true, value: { state: m.state, paymentStatus: p.status, captureStatus: p.captureStatus, payoutStatus: p.payoutStatus, lastError } };
-}
 
 export type WebhookOutcome =
   | { outcome: "reconciled"; state: MilestoneState }

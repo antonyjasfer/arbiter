@@ -3,10 +3,12 @@
 // Server actions for verification (Phase 4). Each validates its input shape with Zod, checks the session
 // and calls a tested server function; none holds logic of its own. Errors come back as codes.
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
 import { parseId } from "@/lib/ids";
 import { requireUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
+import { checkSameOrigin } from "@/server/http/same-origin";
 import { getAi } from "@/server/ai/default-ai";
 import { getRunnerClient } from "@/server/verification/runner-client";
 import { startVerification } from "@/server/verification/runs";
@@ -17,6 +19,7 @@ export type VerificationActionResult<T = undefined> = { ok: true; value: T } | {
 const submitSchema = z.object({ repoUrl: z.string().max(300), commitSha: z.string().max(64), deployUrl: z.string().max(500) });
 
 export async function submitWorkAction(projectId: string, milestoneId: string, input: unknown): Promise<VerificationActionResult<{ submissionId: string }>> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   const parsed = submitSchema.safeParse(input);
@@ -29,6 +32,7 @@ export async function submitWorkAction(projectId: string, milestoneId: string, i
 
 /** SUBMITTED -> VERIFYING. Called right after a submission, and again as "Retry" if the start failed (e.g. AI busy). */
 export async function startVerificationAction(projectId: string, submissionId: string): Promise<VerificationActionResult<{ runId: string }>> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   if (!parseId(projectId) || !parseId(submissionId)) return { ok: false, error: "not_found" };

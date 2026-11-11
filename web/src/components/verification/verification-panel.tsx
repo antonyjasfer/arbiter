@@ -75,7 +75,7 @@ function RunStatus({ run }: { run: Run }) {
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
-        const res = await fetch(`/api/verification-runs/${run.id}`, { cache: "no-store" });
+        const res = await fetch(`/api/verification-runs/${run.id}`, { method: "POST", cache: "no-store" });
         if (res.ok) {
           const next = (await res.json()) as { status: string; runUrl: string | null };
           if (stopped) return;

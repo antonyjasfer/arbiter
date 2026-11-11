@@ -2,7 +2,7 @@
 
 // The client's approve button (with a written override when a check failed) and the payment's live status.
 // On each page view, and every 15 s while PayPal is settling or paying, it asks the server to reconcile
-// the payment from PayPal (GET /api/payments/:id); the server decides what moves, never the browser.
+// the payment from PayPal (a same-origin POST /api/payments/:id; GET only reads); the server decides what moves, never the browser.
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { approveReleaseAction, cancelFundingAction } from "@/app/(app)/projects/payment-actions";
@@ -60,7 +60,7 @@ export function ReleasePanel(props: Props) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
       try {
-        const res = await fetch(`/api/payments/${props.paymentId}`, { cache: "no-store" });
+        const res = await fetch(`/api/payments/${props.paymentId}`, { method: "POST", cache: "no-store" });
         if (res.ok) {
           const v = (await res.json()) as { state: string; paymentStatus: string };
           if (stopped) return;

@@ -1,6 +1,7 @@
 // Phase 4 (verification) error codes -> plain-language text. Owned by the phase-4-verification branch.
 // Looked up through errorText() in messages.ts, after the shared ERROR_TEXT.
 export const VERIFICATION_ERROR_TEXT: Record<string, string> = {
+  forbidden_origin: "This request didn't come from Arbiter's own page, so it was refused. Reload the page and try again.",
   // Submitting
   invalid_repo_url: "Enter a public GitHub repository as https://github.com/owner/repo.",
   invalid_sha: "Enter the full 40-character commit SHA (git rev-parse HEAD).",

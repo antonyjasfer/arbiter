@@ -3,10 +3,12 @@
 // Server actions for payments. Each validates its input, checks the session and calls a tested function
 // in server/payments; none holds logic of its own and none is reachable from AI code. Errors are codes.
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
 import { parseId } from "@/lib/ids";
 import { requireUser } from "@/server/auth/session";
 import { getDb } from "@/server/db/client";
+import { checkSameOrigin } from "@/server/http/same-origin";
 import { getPaypalApi } from "@/server/payments/default-api";
 import { livePayment, loadMilestone } from "@/server/payments/context";
 import { cancelFunding, completeFunding, startFunding } from "@/server/payments/funding";
@@ -24,6 +26,7 @@ const overrideSchema = z
   .optional();
 
 export async function startFundingAction(projectId: string, milestoneId: string): Promise<ActionResult<{ orderId: string }>> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   if (!parseId(String(projectId)) || !parseId(String(milestoneId))) return { ok: false, error: "not_found" };
@@ -33,6 +36,7 @@ export async function startFundingAction(projectId: string, milestoneId: string)
 }
 
 export async function completeFundingAction(projectId: string, milestoneId: string, orderId: string): Promise<ActionResult<{ state: string }>> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   const order = orderIdSchema.safeParse(orderId);
@@ -45,6 +49,7 @@ export async function completeFundingAction(projectId: string, milestoneId: stri
 
 /** The client cancels a funded milestone before any work is submitted: voids the PayPal hold. */
 export async function cancelFundingAction(projectId: string, milestoneId: string): Promise<ActionResult<{ state: string }>> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   if (!parseId(String(projectId)) || !parseId(String(milestoneId))) return { ok: false, error: "not_found" };
@@ -59,6 +64,7 @@ export async function cancelFundingAction(projectId: string, milestoneId: string
  * capture or a payout that didn't start is finished by the poll route (reconcilePayment).
  */
 export async function approveReleaseAction(projectId: string, milestoneId: string, overrideReason: string | null): Promise<ActionResult<{ state: string }>> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   if (!parseId(String(projectId)) || !parseId(String(milestoneId))) return { ok: false, error: "not_found" };
@@ -78,6 +84,7 @@ export async function approveReleaseAction(projectId: string, milestoneId: strin
 }
 
 export async function setPaypalEmailAction(_prev: ActionResult | null, form: FormData): Promise<ActionResult> {
+  if (!checkSameOrigin(await headers())) return { ok: false, error: "forbidden_origin" };
   const user = await requireUser();
   if (!user.ok) return { ok: false, error: "unauthenticated" };
   const email = form.get("paypalEmail");

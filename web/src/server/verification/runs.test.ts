@@ -392,6 +392,22 @@ describe("resume", () => {
   });
 });
 
+describe("the verification POST: runStep advances only the run it is given", () => {
+  it("a second due run is left untouched (no claim, no attempt, no dispatch)", async () => {
+    const runner = fakeRunner();
+    const id = await started(runner);
+    const sub = (await runRow(id)).submissionId;
+    const [other] = await db().insert(s.verificationRuns).values({ submissionId: sub, status: "queued", nextAttemptAt: T0 }).returning({ id: s.verificationRuns.id });
+    const before = await runRow(other!.id);
+    await runStep(db(), runner, id, () => at(1000));
+    expect(runner.dispatches).toHaveLength(1);
+    const after = await runRow(other!.id);
+    expect(after.attempts).toBe(before.attempts);
+    expect(after.leaseUntil).toEqual(before.leaseUntil);
+    expect(after.status).toBe("queued");
+  });
+});
+
 describe("getRunStatus", () => {
   it("is for project members only; anything else is not_found", async () => {
     const runner = fakeRunner();

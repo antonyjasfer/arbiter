@@ -1,5 +1,6 @@
 // Phase 5 (payments) error codes -> plain-language text. Owned by the phase-5-payments branch.
 export const PAYMENT_ERROR_TEXT: Record<string, string> = {
+  forbidden_origin: "This request didn't come from Arbiter's own page, so it was refused. Reload the page and try again.",
   not_agreed: "This milestone can't be funded now. Reload the page to see its current state.",
   payee_email_missing: "The freelancer hasn't added their PayPal email yet. Ask them to add it in Settings, then fund the milestone.",
   already_funded: "This milestone is already funded.",
