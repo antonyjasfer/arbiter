@@ -48,4 +48,4 @@ jobs:
           cache-dependency-path: spikes/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
-      - run: npx vitest run
+      - run: npm test
