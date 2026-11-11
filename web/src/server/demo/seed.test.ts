@@ -9,7 +9,8 @@ import { getCurrentVersion } from "../agreements/versions";
 import { startCompile } from "../agreements/compile-jobs";
 import { createProject, listProjectsForUser } from "../projects/projects";
 import { DEMO_BRIEFS } from "./briefs";
-import { demoUserId, resetDemo, seedDemo, type DemoCache } from "./seed";
+import { approve } from "../agreements/versions";
+import { demoUserId, isKeptPayment, keptDemoProjectIds, resetDemo, seedDemo, type DemoCache } from "./seed";
 
 const db = setupTestDb();
 const MODEL = "gemini-test";
@@ -135,5 +136,124 @@ describe("resetDemo", () => {
     const client = (await demoUserId(db(), "client"))!;
     expect((await listProjectsForUser(db(), client)).map((p) => p.title).sort()).toEqual(["Bakery website", "TaskBoard"]);
     expect(await listProjectsForUser(db(), realUser)).toHaveLength(1);
+  });
+});
+
+// Task 6: Reset demo keeps every project with a live PayPal payment (real sandbox money), and rebuilds the rest.
+async function lockProject(projectId: string, client: string, freelancer: string): Promise<string[]> {
+  for (const userId of [client, freelancer]) {
+    const v = await getCurrentVersion(db(), { userId, projectId });
+    if (!v.ok || !v.value) throw new Error("setup: no version");
+    const r = await approve(db(), { userId, projectId, expectedHash: v.value.hash });
+    if (!r.ok) throw new Error("setup: approve");
+  }
+  const ms = await db()
+    .select({ id: s.milestones.id })
+    .from(s.milestones)
+    .innerJoin(s.agreementVersions, eq(s.agreementVersions.id, s.milestones.agreementVersionId))
+    .innerJoin(s.agreements, eq(s.agreements.id, s.agreementVersions.agreementId))
+    .where(eq(s.agreements.projectId, projectId));
+  return ms.map((m) => m.id);
+}
+async function lockedTaskboard() {
+  await seedDemo(db(), { model: MODEL, cache: fixture() });
+  const taskboard = (await demoProjects()).find((p) => p.title === "TaskBoard")!;
+  const client = (await demoUserId(db(), "client"))!;
+  const freelancer = (await demoUserId(db(), "freelancer"))!;
+  return { projectId: taskboard.id, client, freelancer, milestoneIds: await lockProject(taskboard.id, client, freelancer) };
+}
+async function payment(milestoneId: string, status: string, createdAt = new Date(), extra: Partial<typeof s.payments.$inferInsert> = {}) {
+  await db().insert(s.payments).values({ milestoneId, status, amount: "150.00", createdAt, ...extra });
+}
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+const reset = async (client: string) => resetDemo(db(), { userId: client, model: MODEL, cache: fixture() });
+const projectExists = async (id: string) => (await db().select().from(s.projects).where(eq(s.projects.id, id))).length === 1;
+const KEPT = ["authorized", "approved", "capture_pending", "captured", "capture_denied", "payout_pending", "payout_failed", "payout_unknown", "paid"];
+
+describe("isKeptPayment", () => {
+  const now = new Date();
+  it.each(KEPT)("keeps %s", (status) => {
+    expect(isKeptPayment({ status, createdAt: hoursAgo(1000) }, now)).toBe(true);
+  });
+  it("drops voided and authorization_lost, and an order_pending older than 24 hours", () => {
+    expect(isKeptPayment({ status: "voided", createdAt: now }, now)).toBe(false);
+    expect(isKeptPayment({ status: "authorization_lost", createdAt: now }, now)).toBe(false);
+    expect(isKeptPayment({ status: "order_pending", createdAt: hoursAgo(23) }, now)).toBe(true);
+    expect(isKeptPayment({ status: "order_pending", createdAt: hoursAgo(25) }, now)).toBe(false);
+  });
+});
+
+describe("resetDemo keeps projects with a live PayPal payment", () => {
+  it("a TaskBoard with a pending capture survives with every row and an intact audit chain, next to fresh seed projects", async () => {
+    const tb = await lockedTaskboard();
+    const m1 = tb.milestoneIds[0]!;
+    await db().update(s.milestones).set({ state: "CAPTURE_PENDING" }).where(eq(s.milestones.id, m1));
+    await payment(m1, "capture_pending", hoursAgo(72), { captureId: "24140907B72033302", captureStatus: "PENDING" });
+    const msBefore = await db().select().from(s.milestones).where(inArray(s.milestones.id, tb.milestoneIds));
+    const auditBefore = await db().select().from(s.auditEvents).where(eq(s.auditEvents.projectId, tb.projectId));
+
+    expect(await reset(tb.client)).toEqual({ ok: true, value: undefined });
+
+    expect(await projectExists(tb.projectId)).toBe(true);
+    expect(await db().select().from(s.milestones).where(inArray(s.milestones.id, tb.milestoneIds))).toEqual(msBefore);
+    expect(await db().select().from(s.auditEvents).where(eq(s.auditEvents.projectId, tb.projectId))).toEqual(auditBefore);
+    const [p] = await db().select().from(s.payments).where(eq(s.payments.milestoneId, m1));
+    expect(p!.captureId).toBe("24140907B72033302");
+    expect(await verifyChain(db(), tb.projectId)).toMatchObject({ ok: true });
+    expect((await demoProjects()).map((x) => x.title)).toEqual(["Bakery website", "TaskBoard", "TaskBoard"]);
+    expect(await keptDemoProjectIds(db())).toEqual(new Set([tb.projectId]));
+  });
+
+  it.each(KEPT)("keeps a project whose payment is %s", async (status) => {
+    const tb = await lockedTaskboard();
+    await payment(tb.milestoneIds[0]!, status, hoursAgo(1000));
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(true);
+  });
+
+  it("keeps a 23-hour-old order_pending (the buyer may be approving)", async () => {
+    const tb = await lockedTaskboard();
+    await payment(tb.milestoneIds[0]!, "order_pending", hoursAgo(23));
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(true);
+  });
+
+  it("drops a project whose only payment is a 25-hour-old order_pending", async () => {
+    const tb = await lockedTaskboard();
+    await payment(tb.milestoneIds[0]!, "order_pending", hoursAgo(25));
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(false);
+  });
+
+  it("deletes a project whose only payment was voided", async () => {
+    const tb = await lockedTaskboard();
+    await payment(tb.milestoneIds[0]!, "voided");
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(false);
+    expect((await demoProjects()).map((x) => x.title)).toEqual(["Bakery website", "TaskBoard"]);
+    expect(await keptDemoProjectIds(db())).toEqual(new Set());
+  });
+
+  it("deletes a dropped project whose milestone has a check plan (review I1: check_plans FK)", async () => {
+    // Like the Phase 4 demo projects on live: FUNDED by the old test-only script (no payment row), then verified.
+    const tb = await lockedTaskboard();
+    await db().insert(s.checkPlans).values({ milestoneId: tb.milestoneIds[0]!, criteriaHash: "d".repeat(64), plan: {}, model: "gemini-test" });
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(false);
+    expect(await db().select().from(s.checkPlans)).toEqual([]);
+  });
+
+  it("deletes a project with a verification run and run-level evidence (null check_result_id) cleanly", async () => {
+    const tb = await lockedTaskboard();
+    const m1 = tb.milestoneIds[0]!;
+    const [sub] = await db()
+      .insert(s.submissions)
+      .values({ milestoneId: m1, repoUrl: "https://github.com/x/y", commitSha: "c".repeat(40), deployUrl: "https://x.example", submittedBy: tb.freelancer })
+      .returning({ id: s.submissions.id });
+    const [run] = await db().insert(s.verificationRuns).values({ submissionId: sub!.id, status: "completed" }).returning({ id: s.verificationRuns.id });
+    await db().insert(s.evidence).values({ runId: run!.id, checkResultId: null, type: "run_link", uri: "https://github.com/x/actions/runs/1", sha256: "0".repeat(64) });
+    expect((await reset(tb.client)).ok).toBe(true);
+    expect(await projectExists(tb.projectId)).toBe(false);
+    expect(await db().select().from(s.evidence)).toEqual([]);
   });
 });

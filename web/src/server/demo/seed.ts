@@ -1,7 +1,7 @@
 // Demo data for judges: two seeded users who see only demo projects, and a Reset that restores the seed.
 // Cached compiler outputs (produced by real Gemini calls, see scripts/warm-demo-cache.ts) are loaded into
 // ai_cache, so the demo works instantly and spends no AI quota. Real users' rows are never touched.
-import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, notInArray, or, sql } from "drizzle-orm";
 import { parseId } from "@/lib/ids";
 import type { Result } from "@/lib/result";
 import type { AiUsage } from "../ai/structured-ai";
@@ -87,8 +87,43 @@ export async function seedDemo(db: Db, args: { model: string; cache: DemoCache; 
   });
 }
 
-async function deleteDemoProjects(tx: Db) {
-  const P = tx.select({ id: s.projects.id }).from(s.projects).where(eq(s.projects.isDemo, true));
+// Reset keeps every demo project that has a live PayPal payment: real sandbox money was authorized, captured
+// or paid out there, and its rows and audit chain are the record of it. A fresh order_pending is kept too,
+// because the buyer may still be approving in the PayPal popup. Kept projects are listed in their own
+// section of the dashboard, below the fresh seed projects.
+const ORDER_PENDING_GRACE_MS = 24 * 3_600_000;
+
+export function isKeptPayment(p: { status: string; createdAt: Date }, now: Date): boolean {
+  if (p.status === "voided" || p.status === "authorization_lost") return false;
+  if (p.status === "order_pending") return now.getTime() - p.createdAt.getTime() <= ORDER_PENDING_GRACE_MS;
+  return true;
+}
+
+function demoPaymentsQuery(db: Db) {
+  return db
+    .select({ projectId: s.agreements.projectId, status: s.payments.status, createdAt: s.payments.createdAt })
+    .from(s.payments)
+    .innerJoin(s.milestones, eq(s.milestones.id, s.payments.milestoneId))
+    .innerJoin(s.agreementVersions, eq(s.agreementVersions.id, s.milestones.agreementVersionId))
+    .innerJoin(s.agreements, eq(s.agreements.id, s.agreementVersions.agreementId))
+    .innerJoin(s.projects, eq(s.projects.id, s.agreements.projectId))
+    .where(eq(s.projects.isDemo, true));
+}
+
+function keptFrom(rows: { projectId: string; status: string; createdAt: Date }[], now: Date): Set<string> {
+  return new Set(rows.filter((r) => isKeptPayment(r, now)).map((r) => r.projectId));
+}
+
+/** Demo projects that Reset demo keeps (they have a live PayPal payment). */
+export async function keptDemoProjectIds(db: Db, now = new Date()): Promise<Set<string>> {
+  return keptFrom(await demoPaymentsQuery(db), now);
+}
+
+async function deleteDemoProjects(tx: Db, kept: string[]) {
+  const P = tx
+    .select({ id: s.projects.id })
+    .from(s.projects)
+    .where(kept.length ? and(eq(s.projects.isDemo, true), notInArray(s.projects.id, kept)) : eq(s.projects.isDemo, true));
   const A = tx.select({ id: s.agreements.id }).from(s.agreements).where(inArray(s.agreements.projectId, P));
   const V = tx.select({ id: s.agreementVersions.id }).from(s.agreementVersions).where(inArray(s.agreementVersions.agreementId, A));
   const M = tx.select({ id: s.milestones.id }).from(s.milestones).where(inArray(s.milestones.agreementVersionId, V));
@@ -97,12 +132,13 @@ async function deleteDemoProjects(tx: Db) {
   const R = tx.select({ id: s.verificationRuns.id }).from(s.verificationRuns).where(inArray(s.verificationRuns.submissionId, S));
   const CR = tx.select({ id: s.checkResults.id }).from(s.checkResults).where(or(inArray(s.checkResults.runId, R), inArray(s.checkResults.criterionId, C)));
   // Children first, so no foreign key blocks a delete.
-  await tx.delete(s.evidence).where(inArray(s.evidence.checkResultId, CR));
+  await tx.delete(s.evidence).where(or(inArray(s.evidence.checkResultId, CR), inArray(s.evidence.runId, R)));
   await tx.delete(s.checkResults).where(or(inArray(s.checkResults.runId, R), inArray(s.checkResults.criterionId, C)));
   await tx.delete(s.verificationRuns).where(inArray(s.verificationRuns.submissionId, S));
   await tx.delete(s.submissions).where(inArray(s.submissions.milestoneId, M));
   await tx.delete(s.disputes).where(inArray(s.disputes.milestoneId, M));
   await tx.delete(s.payments).where(inArray(s.payments.milestoneId, M));
+  await tx.delete(s.checkPlans).where(inArray(s.checkPlans.milestoneId, M));
   await tx.delete(s.acceptanceCriteria).where(inArray(s.acceptanceCriteria.milestoneId, M));
   await tx.delete(s.milestones).where(inArray(s.milestones.agreementVersionId, V));
   await tx.delete(s.agreementVersions).where(inArray(s.agreementVersions.agreementId, A));
@@ -111,7 +147,7 @@ async function deleteDemoProjects(tx: Db) {
   await tx.delete(s.invitations).where(inArray(s.invitations.projectId, P));
   await tx.delete(s.auditEvents).where(inArray(s.auditEvents.projectId, P));
   await tx.delete(s.projectMembers).where(inArray(s.projectMembers.projectId, P));
-  await tx.delete(s.projects).where(eq(s.projects.isDemo, true));
+  await tx.delete(s.projects).where(inArray(s.projects.id, P));
 }
 
 /** Demo users only, at most once per 30 s across all demo users (the demo is shared). */
@@ -129,11 +165,25 @@ export async function resetDemo(db: Db, args: { userId: string; model: string; c
       .where(and(eq(s.projects.isDemo, true), eq(s.auditEvents.action, "demo_reset"), gt(s.auditEvents.createdAt, since)))
       .limit(1);
     if (recent) return { ok: false, error: "too_soon" } as const;
-    await deleteDemoProjects(tx);
+    // Lock every demo payment, then every demo milestone (the order the payment writers use), before deciding
+    // what to keep, so a funding or capture that is
+    // running right now either finished first (and is kept) or waits and then fails on the deleted milestone
+    // before any PayPal call (funding inserts its payment row before create-order).
+    const lockedPayments = await demoPaymentsQuery(tx).for("update", { of: s.payments });
+    await tx
+      .select({ id: s.milestones.id })
+      .from(s.milestones)
+      .innerJoin(s.agreementVersions, eq(s.agreementVersions.id, s.milestones.agreementVersionId))
+      .innerJoin(s.agreements, eq(s.agreements.id, s.agreementVersions.agreementId))
+      .innerJoin(s.projects, eq(s.projects.id, s.agreements.projectId))
+      .where(eq(s.projects.isDemo, true))
+      .for("update", { of: s.milestones });
+    const kept = [...keptFrom(lockedPayments, new Date())];
+    await deleteDemoProjects(tx, kept);
     const ids = await upsertDemoUsers(tx, args.freelancerPaypalEmail);
     await loadCache(tx, args.cache);
     const [first] = await createDemoProjects(tx, ids, args.model, args.cache);
-    await appendAudit(tx, { projectId: first!, actorId: args.userId, action: "demo_reset", data: {} });
+    await appendAudit(tx, { projectId: first!, actorId: args.userId, action: "demo_reset", data: { kept: kept.length } });
     return { ok: true, value: undefined } as const;
   });
 }

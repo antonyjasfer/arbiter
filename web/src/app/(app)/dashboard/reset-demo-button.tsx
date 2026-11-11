@@ -20,7 +20,7 @@ export function ResetDemoButton() {
         variant="outline"
         disabled={pending}
         onClick={() => {
-          if (!window.confirm("Reset the demo for everyone? Demo projects go back to their starting state.")) return;
+          if (!window.confirm("Reset demo deletes the demo projects and creates fresh ones. Projects with a live PayPal payment are kept.")) return;
           start(async () => {
             const r = await resetDemoAction();
             setMessage(r.ok ? "Demo reset." : errorText(r.error ?? "error"));

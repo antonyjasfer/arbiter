@@ -1,4 +1,24 @@
 // Decides how to point the PayPal webhook at a URL without ever creating a duplicate.
+// The events Arbiter subscribes to. Phase 5 adds CAPTURE.DENIED, REVERSED and REFUNDED; each only triggers
+// a read-back from PayPal (the event body is never trusted). Names: PayPal Webhooks event-names reference.
+export const WEBHOOK_EVENT_TYPES = [
+  "CHECKOUT.ORDER.APPROVED",
+  "PAYMENT.AUTHORIZATION.CREATED",
+  "PAYMENT.AUTHORIZATION.VOIDED",
+  "PAYMENT.CAPTURE.PENDING",
+  "PAYMENT.CAPTURE.COMPLETED",
+  "PAYMENT.CAPTURE.DENIED",
+  "PAYMENT.CAPTURE.REVERSED",
+  "PAYMENT.CAPTURE.REFUNDED",
+  "PAYMENT.PAYOUTSBATCH.SUCCESS",
+  "PAYMENT.PAYOUTS-ITEM.SUCCEEDED",
+];
+
+/** A write's idempotency key: same action, url and body reuse a request id; any change gets a new one. */
+export function requestKey(action: string, url: string, body: unknown): string {
+  return `${action} ${url} ${JSON.stringify(body)}`;
+}
+
 export type ExistingWebhook = { id: string; url: string; eventTypes: string[] };
 export type PatchOp = { op: "replace"; path: "/url" | "/event_types"; value: unknown };
 export type RegistrationPlan = { action: "reuse"; id: string } | { action: "patch"; id: string; patch: PatchOp[] } | { action: "create" };

@@ -80,7 +80,7 @@ async function ProjectWorkspace({ params, searchParams }: PageProps<"/projects/[
         <section aria-label="Agreement">
           <div className="flex flex-col gap-6">
             <AgreementWorkspace ws={ws} failedDraft={ws.draft} startError={startError} />
-            <LockedMilestones projectId={ws.project.id} milestones={locked.ok ? locked.value : []} role={ws.role} />
+            <LockedMilestones projectId={ws.project.id} milestones={locked.ok ? locked.value : []} role={ws.role} isDemo={ws.project.isDemo} />
           </div>
         </section>
       </div>

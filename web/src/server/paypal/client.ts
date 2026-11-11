@@ -1,7 +1,10 @@
 import "server-only";
-// Sandbox-only PayPal REST client for Phase 2: OAuth, webhook signature verification, read-only GETs.
-// No money-moving endpoint is reachable from here (CLAUDE.md rule 1).
-// Source: PayPal REST docs (OAuth 2.0 client credentials; Webhooks v1 verify-webhook-signature).
+// Sandbox-only PayPal REST client: OAuth, webhook signature verification, read-only GETs, and (Phase 5)
+// the authenticated transport `paypalHttp`. paypalHttp can reach money-moving endpoints, so only
+// server/payments may import it (CLAUDE.md rule 1; enforced by server/payments/boundary.test.ts).
+// Source: PayPal REST docs (OAuth 2.0 client credentials; Webhooks v1 verify-webhook-signature;
+// PayPal-Request-Id idempotency header: developer.paypal.com/api/rest/reference/idempotency).
+import type { PaypalHttp } from "../payments/paypal-api";
 import { serverEnv } from "../env";
 import { tokenResponseSchema, verifyResponseSchema } from "./responses";
 
@@ -33,6 +36,36 @@ export async function verifyWebhookSignature(verifyBody: string): Promise<string
   const body = verifyResponseSchema.safeParse(await res.json().catch(() => ({})));
   return body.success ? body.data.verification_status : "UNKNOWN";
 }
+
+const REQUEST_ID = /^[A-Za-z0-9-]{8,108}$/;
+
+// Phase 5 transport. Never throws on a 4xx/5xx (the caller maps PayPal's answer); throws only when the
+// network fails. Every POST carries the caller's stored PayPal-Request-Id.
+export const paypalHttp: PaypalHttp = {
+  async post(path, body, opts) {
+    if (!path.startsWith("/") || !REQUEST_ID.test(opts.requestId)) throw new Error("paypalHttp: bad path or request id");
+    const res = await fetch(`${SANDBOX}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await accessToken()}`,
+        "Content-Type": "application/json",
+        "PayPal-Request-Id": opts.requestId,
+        Prefer: "return=representation",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    // A 401 means PayPal no longer accepts the cached token: drop it so the next call fetches a new one.
+    if (res.status === 401) cached = undefined;
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  },
+  async get(path) {
+    if (!path.startsWith("/")) throw new Error("paypalHttp: bad path");
+    const res = await fetch(`${SANDBOX}${path}`, { headers: { Authorization: `Bearer ${await accessToken()}` }, signal: AbortSignal.timeout(30_000) });
+    if (res.status === 401) cached = undefined;
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  },
+};
 
 // Returns unknown on purpose: reconcile.ts's statusOf reads only the status field, defensively.
 export async function getPaypalResource(path: string): Promise<unknown> {

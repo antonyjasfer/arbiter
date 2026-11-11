@@ -8,7 +8,7 @@
     "spike:runner": "tsx 02-runner.ts",
     "spike:gemini": "tsx 04-gemini.ts",
     "spike:neon": "tsx 05-neon-ping.ts",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=2",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

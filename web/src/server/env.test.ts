@@ -27,6 +27,14 @@ describe("phase 4 and 5 variables", () => {
   });
 });
 
+describe("phase 6 variables", () => {
+  it("AUTH_URL is optional, and must be a URL when set (the same-origin check trusts its origin)", () => {
+    expect(parseServerEnv(valid).AUTH_URL).toBeUndefined();
+    expect(parseServerEnv({ ...valid, AUTH_URL: "https://arbiter-q41f.onrender.com" }).AUTH_URL).toBe("https://arbiter-q41f.onrender.com");
+    expect(() => parseServerEnv({ ...valid, AUTH_URL: "not a url" })).toThrow(/AUTH_URL/);
+  });
+});
+
 describe("phase 3 variables", () => {
   it("requires GEMINI_API_KEY", () => {
     const rest: Record<string, string | undefined> = { ...valid };

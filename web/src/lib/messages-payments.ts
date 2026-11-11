@@ -1,2 +1,32 @@
 // Phase 5 (payments) error codes -> plain-language text. Owned by the phase-5-payments branch.
-export const PAYMENT_ERROR_TEXT: Record<string, string> = {};
+export const PAYMENT_ERROR_TEXT: Record<string, string> = {
+  forbidden_origin: "This request didn't come from Arbiter's own page, so it was refused. Reload the page and try again.",
+  not_agreed: "This milestone can't be funded now. Reload the page to see its current state.",
+  payee_email_missing: "The freelancer hasn't added their PayPal email yet. Ask them to add it in Settings, then fund the milestone.",
+  already_funded: "This milestone is already funded.",
+  order_mismatch: "That PayPal order doesn't belong to this milestone. Reload the page and try again.",
+  order_not_approved: "PayPal hasn't confirmed your approval. Nothing was charged; try the PayPal button again.",
+  authorization_not_created: "PayPal didn't place the hold. Nothing was charged; try again or use another payment method in PayPal.",
+  amount_mismatch: "PayPal reported a different amount than the milestone. Nothing was funded; contact support.",
+  paypal_refused: "PayPal refused the request. Nothing was charged; try again.",
+  paypal_unavailable: "PayPal didn't answer in time. Nothing was charged twice; try again and Arbiter will pick up where it left off.",
+  conflict: "Someone else changed this milestone at the same moment. Reload the page.",
+  paypal_sdk_failed: "The PayPal button couldn't load. Check your connection or ad blocker, then reload.",
+  paypal_cancelled: "You closed PayPal before approving. Nothing was charged.",
+  invalid_email: "Enter a valid email address (up to 254 characters).",
+  demo_locked: "Demo accounts use a seeded sandbox email, so it can't be changed.",
+  not_cancellable: "This milestone can't be cancelled now: only a funded milestone with no submitted work can. Reload the page.",
+  // Release (the payment guard and capture/payout).
+  not_releasable: "This milestone can't be released now. Reload the page to see its current state.",
+  not_funded: "This milestone isn't funded, so there's nothing to release.",
+  refund_needed: "PayPal's hold on this milestone has expired or was voided, so it can't be released. Re-funding after work was submitted isn't supported yet; contact support.",
+  amount_exceeds_milestone: "The payment amount doesn't match the milestone. Nothing was captured; contact support.",
+  payee_changed: "The freelancer's PayPal email changed after funding. Nothing was captured or paid; contact support.",
+  approver_not_client: "Only the project's client can approve a release.",
+  no_report: "There's no finished verification report for this milestone yet.",
+  fail_without_override: "A check failed. To release anyway, write why (at least 20 characters).",
+  override_too_short: "Write at least 20 characters explaining why you're releasing despite the failed check.",
+  capture_not_completed: "PayPal hasn't finished settling the payment, so the freelancer can't be paid yet.",
+  payout_failed: "PayPal couldn't pay the freelancer. Arbiter doesn't retry this automatically; contact support.",
+  payout_unknown: "PayPal didn't confirm whether the freelancer was paid. Arbiter won't send it again; support checks PayPal first.",
+};

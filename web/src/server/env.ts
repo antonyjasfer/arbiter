@@ -27,6 +27,8 @@ const schema = z.object({
   GITHUB_RUNNER_TOKEN: z.preprocess(blankToUndefined, z.string().optional()),
   RUNNER_REPO: z.preprocess(blankToUndefined, z.string().regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/).optional()),
   PAYPAL_FREELANCER_EMAIL: z.preprocess(blankToUndefined, z.email().optional()),
+  // Phase 6: the public origin. The same-origin check for POSTs and server actions trusts only this.
+  AUTH_URL: z.preprocess(blankToUndefined, z.url().optional()),
 });
 
 export type ServerEnv = z.infer<typeof schema>;
