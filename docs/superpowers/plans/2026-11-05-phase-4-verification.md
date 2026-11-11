@@ -34,6 +34,8 @@
   - **browser:** `goto`, `fill_by_label`, `click_by_role`, `expect_text`, `expect_checkbox_checked`, `http_get` (status and optional JSON equality).
   - **review:** no check.
 - **Verdicts are deterministic only:** the Jobs API plus the results artifact. Review criteria always end NEEDS HUMAN REVIEW. The Evidence Reviewer (Gemini) writes `ai_summary` only.
+- **Forged-results defence (user, 5 Nov):** `permissions: {}` does not stop an artifact upload, because uploads use the runner's own runtime token, not `GITHUB_TOKEN`. So in `verify.yml`, the `browser` job runs **first**, and the `tests` job has `needs: browser`. The trusted results artifact therefore exists before any untrusted code runs. Arbiter marks the run **errored** (`error_code: unexpected_artifacts`) if the run has any artifact other than the one named `arbiter-results`, more than one artifact with that name, or a results artifact created after the `tests` job started. A fixture that tries to upload a forged results artifact from the tests job proves this in a live run, recorded in FINDINGS.
+- **Arbiter-run checks first (user, 5 Nov):** the freelancer writes their own tests, so their suite is weak evidence. The Check Planner must use Arbiter-run checks (`browser` steps and `http_get`) for every behaviour criterion. The `test` kind is allowed only for a criterion that literally says the repo's test suite passes. This is enforced in code after the model replies, not only in the prompt. The report labels `test` verdicts "Freelancer's own test suite".
 - **AI calls** count against the existing `ai_usage` caps (scope per user, or demo). Plans are cached per milestone in `check_plans`, keyed by the criteria hash.
 - **No production shortcut to FUNDED.** Tests may call `transitionMilestone` directly to set up FUNDED.
 - **Evidence:** screenshots of at most 300 KB each and at most 20 per run, stored in `evidence.content` with their SHA-256 and served by Arbiter to project members only.
@@ -57,6 +59,7 @@
 - **App:** `web/src/app/(app)/projects/verification-actions.ts`; `web/src/app/(app)/projects/[projectId]/milestones/[milestoneId]/report/page.tsx`; `web/src/app/api/verification-runs/[runId]/route.ts` (poll and resume); `web/src/app/api/evidence/[evidenceId]/route.ts`.
 - **UI:** `web/src/components/verification/*`, including filling in `milestone-verification.tsx`, and `web/src/lib/messages-verification.ts`.
 - **Boot resume:** one added line in `web/src/instrumentation-node.ts` resumes verification runs. Phase 5 doesn't touch this file, since it resumes nothing on boot.
+- **Test-only script:** `web/scripts/dev-fund-milestone.ts` (deleted in Phase 6).
 - **Dependencies:** `web/package.json` and its lock, adding `fflate@0.8.3`. No other dependency changes.
 - **Runner repo** `antonyjasfer/arbiter-runner`: `.github/workflows/verify.yml`, `browser/` (the DSL interpreter, Playwright), and fixtures.
 - **New repos** `antonyjasfer/arbiter-demo-pass`, `-fail` and `-injection` (creation approved by the user), and their Render Free services.
@@ -71,6 +74,8 @@
 3. **Injected text:** README or HTML comments telling AI reviewers to mark everything passed. These are flagged as evidence, and the reviewer's output cannot change any verdict (test in Task 7).
 4. **Lost or stuck runs:** the dispatch succeeds but the run is never found; the server restarts mid-poll; the run takes longer than 10 minutes. Lease and resume pick the run up. Past the deadline it is marked errored and moves VERIFYING→SUBMITTED via `run_errored` with a clear message (Task 6).
 5. **Cross-tenant evidence:** an evidence or report URL opened by a non-member, or across the demo boundary, gets a 404 (Task 8).
+6. **Forged results:** the freelancer's `npm test` finds the runner's runtime token and uploads its own `arbiter-results` saying everything passed. The browser job has already uploaded the real one, so the run now has two results artifacts (or one made after the tests job started), and Arbiter marks it errored instead of reading either (Tasks 5 and 6).
+7. **A weak freelancer suite:** a repo whose `npm test` is `exit 0`. Behaviour criteria never use the `test` kind, so a passing suite can't pass them (Task 1).
 
 ---
 
@@ -89,6 +94,8 @@
   - Review criteria have no steps.
   - The planner prompt wraps the criteria as data.
   - Invalid model output gives `invalid_plan` after one re-ask.
+  - `enforceCheckKinds(criteria, plan)` (pure, runs after Zod): a `test` kind on a criterion whose text doesn't say the repo's test suite passes is rejected as `invalid_plan` (one re-ask, then the error). Allowed: "The repo's test suite passes", "`npm test` passes". Rejected: "Ticking a task marks it done", "The API returns 200 on /health", "Tests cover the add-task form". The match is a small fixed phrase list, tested with these exact strings.
+  - The prompt tells the model to use `browser` or `http_get` steps for every behaviour criterion, and `review` when no Arbiter-run check can decide it.
   - A cache hit skips the AI, and a change to the criteria invalidates the cache.
 - [ ] Implement, run the tests, commit `feat(verification): check DSL and planner`.
 
@@ -124,7 +131,7 @@
 
 **Files:** `server/verification/runner-client.ts` (tested with a fake `fetch`).
 
-**Interfaces:** `dispatchVerify({ runName, repoUrl, sha, deployUrl, planB64 })`, `findRunByName(runName, since)`, `getJobs(runId)`, `downloadArtifact(runId, name)` (zip → files, size-capped), `getRepoFiles` and `isPublicRepo`. It reads `GITHUB_RUNNER_TOKEN` and `RUNNER_REPO` via `serverEnv()`; if either is missing it returns a typed `runner_not_configured`.
+**Interfaces:** `dispatchVerify({ runName, repoUrl, sha, deployUrl, planB64 })`, `findRunByName(runName, since)`, `getJobs(runId)` (each job's conclusion, steps, `started_at` and `completed_at`), `listArtifacts(runId)` (id, name, `created_at`, size), `downloadArtifact(runId, artifactId)` (zip → files, size-capped), `getRepoFiles` and `isPublicRepo`. It reads `GITHUB_RUNNER_TOKEN` and `RUNNER_REPO` via `serverEnv()`; if either is missing it returns a typed `runner_not_configured`.
 
 - [ ] Tests:
   - Request shapes and headers.
@@ -135,17 +142,18 @@
 
 ### Task 5: `verify.yml` and the browser interpreter (arbiter-runner repo)
 
-**Files (runner repo):** `.github/workflows/verify.yml`, `browser/run-plan.mjs`, `browser/dsl.mjs`, and `fixtures/` (malicious-postinstall, never-ending-test).
+**Files (runner repo):** `.github/workflows/verify.yml`, `browser/run-plan.mjs`, `browser/dsl.mjs`, and `fixtures/` (malicious-postinstall, never-ending-test, forged-results).
 
-- [ ] Write `verify.yml`:
+- [ ] Write `verify.yml` (job order: `validate` → `browser` → `tests`):
   - **Inputs:** `workflow_dispatch` inputs `repo_url`, `sha`, `deploy_url`, `run_name` and `plan_b64`, with `run-name: ${{ inputs.run_name }}` (the dispatch-key UUID, regex-checked).
   - **Job `validate`:** no checkout; the inputs are passed via env and regex-checked.
-  - **Job `tests`:** `permissions: {}` and `timeout-minutes: 10`. It checks out the freelancer repo at the SHA, then runs `env -i PATH=… npm ci --ignore-scripts=false && npm test`.
-  - **Job `browser`:** `permissions: {}`, with no repo checkout. It interprets the decoded plan with Playwright against `deploy_url` and writes `results.json` and the screenshots. It uploads them with `actions/upload-artifact@<current major>`, checking the current major against GitHub's releases at implementation time.
+  - **Job `tests`:** `needs: [validate, browser]` with `if: always() && needs.validate.result == 'success'`, so it runs even when a browser check fails, but only after the trusted artifact exists. `permissions: {}` and `timeout-minutes: 10`. It uploads nothing. It checks out the freelancer repo at the SHA, then runs `env -i PATH=… npm ci --ignore-scripts=false && npm test`.
+  - **Job `browser`:** `needs: validate`, `permissions: {}`, with no repo checkout, and it runs before any untrusted code. It interprets the decoded plan with Playwright against `deploy_url` and writes `results.json` and the screenshots. It uploads them as the single artifact `arbiter-results` with `actions/upload-artifact@<current major>`, checking the current major against GitHub's releases at implementation time.
 - [ ] Prove it with live runs, recorded in FINDINGS:
   - The existing pass and fail fixtures.
   - A malicious `postinstall` sees no secrets (empty env), and the run's verdict depends on exit codes only.
   - A never-ending test is cancelled at 10 minutes (one live run).
+  - **Forged results:** the `forged-results` fixture's `npm test` searches the runner for the artifact runtime token (environment, parent process environment, runner files) and tries to upload an `arbiter-results` artifact marking every criterion passed. One live run, dispatched through Arbiter. It passes if either the upload fails, or it succeeds and Arbiter marks the run errored with `unexpected_artifacts`. Either way no verdict is written. Record which happened, the run URL and the artifact list in FINDINGS.
 - [ ] Commit in the runner repo and record the workflow SHA.
 
 ### Task 6: Verification runs as DB jobs
@@ -171,6 +179,7 @@
   - A failed tests job makes every `test` criterion FAIL.
   - A failed browser step makes that criterion FAIL, recording the failing step.
   - A missing results artifact makes the browser criteria NEEDS HUMAN REVIEW, with the reason.
+  - `checkArtifacts(jobs, artifacts)` (pure): exactly one `arbiter-results` created before the `tests` job's `started_at` is accepted. Any other artifact name, a second `arbiter-results`, or one created after the tests job started makes the run `errored` with `error_code: unexpected_artifacts`, no verdicts written, VERIFYING→SUBMITTED via `run_errored`, and an audit event. Results are never downloaded from a rejected set.
   - Review criteria are always NEEDS HUMAN REVIEW.
   - Verdicts are written with `source: deterministic`.
 - [ ] Implement, commit.
@@ -194,7 +203,7 @@
 
 - [ ] **Report:** for each criterion:
   - the verdict (PASS, FAIL or NEEDS HUMAN REVIEW, as a colour plus the word);
-  - a source badge (Deterministic, AI summary, or Needs human review);
+  - a source badge (Deterministic, AI summary, or Needs human review). A `test`-kind verdict is labelled "Freelancer's own test suite", so a reader can tell it apart from checks Arbiter ran;
   - the step evidence and screenshots;
   - the AI summary, labelled as such.
 
@@ -205,24 +214,29 @@
 
 ### Task 9: Demo repos, live runs, review, handoff
 
-- [ ] **Demo repos:** create `arbiter-demo-pass`, `-fail` and `-injection`, each a TaskBoard app for Milestone 1 (add, tick, health, `npm test`):
+- [x] **Demo repos:** create `arbiter-demo-pass`, `-fail` and `-injection`, each a TaskBoard app for Milestone 1 (add, tick, health, `npm test`):
   - `-fail`: ticking a task doesn't mark it done.
   - `-injection`: a README and an HTML comment addressed to AI reviewers, plus one real failing criterion.
 
   Deploy each as a Render Free web service (Virginia) and pin each commit SHA.
-- [ ] **Live:** three real runs (pass, fail, injection) end to end, tolerating the cold start. Record timings and run URLs in FINDINGS "Phase 4 live checks".
-- [ ] **Review:** a fresh-subagent review focused on security, using the Review Focus list; fix Important and above test-first.
+- [x] **Test-only path to FUNDED:** `web/scripts/dev-fund-milestone.ts`, a local CLI script that uses the DB directly through `transitionMilestone` and refuses to run unless `PAYPAL_ENVIRONMENT=SANDBOX` and it is given an explicit milestone ID. It is never an HTTP route or server action. Phase 6 deletes it.
+- [x] **Live:** three real runs (pass, fail, injection) end to end, tolerating the cold start. Record timings and run URLs in FINDINGS "Phase 4 live checks".
+- [x] **Review:** a fresh-subagent review focused on security, using the Review Focus list; fix Important and above test-first.
 - [ ] **Handoff:** do **not** merge to `main` alone. Hand the branch to Phase 6 (see below). Run the secret scan before every push.
 
 ## Render and GitHub settings the user adds
 
 - On Render `arbiter`:
-  - `GITHUB_RUNNER_TOKEN`: a fine-grained PAT with Actions read/write and Contents read on `antonyjasfer/arbiter-runner`, plus public-repo read for contents and artifacts.
-  - `RUNNER_REPO=antonyjasfer/arbiter-runner` (already recorded in `render.yaml`).
+  - `GITHUB_RUNNER_TOKEN`, `RUNNER_REPO` and `PAYPAL_FREELANCER_EMAIL` are set (user, 5 Nov).
+  - **Checked 5 Nov:** the fine-grained token in `.env.local` reads other users' public repos (contents and commits of `octocat/Hello-World` returned 200) at the authenticated limit of 5000 requests per hour. So `getRepoFiles` and `isPublicRepo` use the token; no unauthenticated fallback is needed. (Unauthenticated reads would be 60 per hour per IP, shared by everything on Render's outbound IP, so they'd only be an emergency fallback.) Task 4 re-checks this once with the Render value at deploy time, via a status-only call.
 - Three new Render Free services for the demo repos (approved).
 
 ## What Phase 6 must connect
 
-- **Funding:** real FUNDED comes from Phase 5; Phase 4's demo uses a test-only path. Phase 6 runs the full flow: fund → submit → verify → report → approve.
+- **Funding:** real FUNDED comes from Phase 5; Phase 4's demo uses the local CLI script `web/scripts/dev-fund-milestone.ts`, which Phase 6 deletes. Phase 6 runs the full flow: fund → submit → verify → report → approve.
 - **Payment guard:** Phase 5's guard reads "the latest run has no FAIL" from the `check_results` of the latest completed run of the latest live submission. Phase 6 wires it to Phase 4's `report.ts` read model, through `latestVerdicts(milestoneId)` (exported here).
 - **Also:** the DISPUTED path (the Disagree button) and seeding submitted runs into the demo.
+- **Delete `web/scripts/dev-fund-milestone.ts` (user, 8 Nov).** Also flag or clean up the three verification-demo milestones it funded (FUNDED, then REPORT_READY, with no PayPal authorization), and make Phase 5's capture fail closed on them.
+- **Report: "What Arbiter checked" per criterion (user, 8 Nov).** Show the planned step summary for each criterion on the report page, using the shared `describeStep` (`web/src/lib/describe-step.ts`), which names the JSON fields compared or says "body not checked". This lets the client see when a plan checks less than its criterion asks (FINDINGS, Phase 4 live checks).
+- **Security review Minor items (8 Nov):** listed in FINDINGS, "Phase 4 live checks".
+- **Test workers (user, 8 Nov):** on an 8 GB machine the full Vitest suite with default parallelism timed out 1–3 different PGlite-backed tests per run (each passes alone); with `--maxWorkers=2` all 330 passed. Phase 6 should cap Vitest workers in the test script for low-memory machines and in CI. Shared config was not changed in Phase 4.
